@@ -12,6 +12,7 @@ __pycache__/
 **/execution_logs/
 **/build_cache/
 **/logs/
+**/operation_data/
 *.zip
 *.tar
 *.tar.gz

@@ -1,5 +1,7 @@
 # 首次运行说明（Linux 服务器）
 
+2026-10-18 已有服务器日志：安装与 18 项测试通过，03 缺少 Vulkan 库。已有这一结果的机器请直接执行 [Vulkan 修复与第 03 步重试](09_vulkan_repair.md)，无需重复下面的完整首次流程。
+
 此文档中的命令只在服务器执行。先把代码同步到 `/root/idea1_verify_all/idea1_firsttest_20sample`，并确认测试文件已经由负责的开发者提交且完成 review。Windows 机器只用于编辑代码。
 
 默认路径如下：
