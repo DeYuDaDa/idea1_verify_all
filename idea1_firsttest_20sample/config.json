@@ -1,0 +1,18 @@
+{
+  "ai2thor_version": "5.0.0",
+  "platform": "CloudRendering",
+  "width": 640,
+  "height": 480,
+  "settle_steps": 12,
+  "position_tolerance_m": 0.01,
+  "scene_candidates": {
+    "microwave": ["FloorPlan1", "FloorPlan2", "FloorPlan3", "FloorPlan4", "FloorPlan5", "FloorPlan6", "FloorPlan7", "FloorPlan8", "FloorPlan9", "FloorPlan10"],
+    "stove": ["FloorPlan1", "FloorPlan2", "FloorPlan3", "FloorPlan4", "FloorPlan5", "FloorPlan6", "FloorPlan7", "FloorPlan8", "FloorPlan9", "FloorPlan10"],
+    "water": ["FloorPlan1", "FloorPlan2", "FloorPlan3", "FloorPlan4", "FloorPlan5", "FloorPlan6", "FloorPlan7", "FloorPlan8", "FloorPlan9", "FloorPlan10"],
+    "coffee": ["FloorPlan1", "FloorPlan2", "FloorPlan3", "FloorPlan4", "FloorPlan5", "FloorPlan6", "FloorPlan7", "FloorPlan8", "FloorPlan9", "FloorPlan10"],
+    "toaster": ["FloorPlan1", "FloorPlan2", "FloorPlan3", "FloorPlan4", "FloorPlan5", "FloorPlan6", "FloorPlan7", "FloorPlan8", "FloorPlan9", "FloorPlan10"],
+    "breakage": ["FloorPlan201", "FloorPlan202", "FloorPlan203", "FloorPlan204", "FloorPlan301", "FloorPlan302"],
+    "carrying": ["FloorPlan1", "FloorPlan2", "FloorPlan3", "FloorPlan4", "FloorPlan5", "FloorPlan6", "FloorPlan7", "FloorPlan8", "FloorPlan9", "FloorPlan10"],
+    "shower": ["FloorPlan401", "FloorPlan402", "FloorPlan403", "FloorPlan404", "FloorPlan405", "FloorPlan406", "FloorPlan407", "FloorPlan408", "FloorPlan409", "FloorPlan410"]
+  }
+}

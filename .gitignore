@@ -1,0 +1,21 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.conda/
+.env
+.env.*
+!.env.example
+# Generated data, build caches and logs belong outside this repository.
+**/outputs/
+**/exports/
+**/execution_logs/
+**/build_cache/
+**/logs/
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.npy
+*.npz
+

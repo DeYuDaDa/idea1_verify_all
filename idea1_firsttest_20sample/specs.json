@@ -1,0 +1,188 @@
+{
+  "dataset_id": "AI2THOR-ESBR-20-V0.1-design",
+  "status": "design_spec_not_generated_or_simulator_verified",
+  "purpose": "Specify 20 paired designs (40 variants) for event-conditioned selective fact revision. This file is not a generated dataset and contains no fixed model gold predictions.",
+  "labeling_policy": "After execution, derive change labels and before/after values from the actual simulator metadata and recorded action result. The expected_checks below are hypotheses and validation predicates, not gold labels.",
+  "pairs": [
+    {
+      "pair_id": "M01", "family": "microwave", "contrast_key": "potato_inside_microwave_at_event", "strict_minimal_pair": true,
+      "event": {"action": "ToggleObjectOn", "target": "Microwave_1", "success_required": true, "shared": "Turn on the same initially-off microwave; retain a Potato and Bowl in the scene."},
+      "mechanism": "microwave_heating_with_containment_boundary",
+      "rules": {"common_initial_facts": ["Microwave is off", "Bowl is inside Microwave"], "A": ["Potato is inside Microwave", "Potato is uncooked"], "B": ["Potato is outside Microwave on a counter", "Potato is uncooked"], "change_candidate_facts": ["Microwave.isToggled", "temperature of contained Bowl", "temperature and cooked state of contained Potato"], "preserve_candidate_facts": ["Potato containment/location in each variant", "Bowl containment/location", "unrelated object attributes"], "flip_requirement": "Only Potato's membership in the active microwave differs; verify that this changes Potato heating/cooking outcomes while common Bowl outcome remains the same."},
+      "observable_requirements": ["History establishes object identities and containment before the event.", "Event evidence establishes successful activation.", "If temperature is not visually inferable, expose the authorized historical rule and classify current temperature as unknown unless event plus rule suffices under the protocol."],
+      "expectedchecks": ["lastActionSuccess is true and Microwave.isToggled changes off to on.", "Compare Bowl and Potato metadata before/after; do not assume heat/cooking succeeded.", "Check that B's external Potato does not acquire a change solely due to scene co-presence.", "Check the A/B target fact contrast is real in actual metadata."],
+      "known_support_risks": ["Confirm the selected scene and microwave support the documented heating behavior and object types.", "Heating/temperature and cooking may have distinct timing or metadata semantics."], "references": []
+    },
+    {
+      "pair_id": "M02", "family": "microwave", "contrast_key": "potato_isCooked_before_event", "strict_minimal_pair": true,
+      "event": {"action": "ToggleObjectOn", "target": "Microwave_1", "success_required": true, "shared": "Turn on the same initially-off microwave containing the same Potato."},
+      "mechanism": "microwave_cooking_with_already_satisfied_boolean",
+      "rules": {"common_initial_facts": ["Potato is inside Microwave", "Microwave is off"], "A": ["Potato.isCooked is false"], "B": ["Potato.isCooked is true, established by a setup action and verified before the evaluated event"], "change_candidate_facts": ["Microwave.isToggled", "Potato temperature", "Potato.isCooked only if actual value changes"], "preserve_candidate_facts": ["Potato containment", "B's already-true isCooked state if it remains true"], "flip_requirement": "The pre-event cooked value must be the only intended contrast. Do not label B's already-true Boolean as a new change; verify temperature independently."},
+      "observable_requirements": ["Provide evidence of the pre-event cooked state and containment.", "Record the setup action separately from the evaluated activation event."],
+      "expectedchecks": ["Verify actual pre/post isCooked and temperature values for both variants.", "Ensure B is genuinely cooked before activation and remains so; if setup does not achieve this, mark the pair unfillable or redesign.", "Do not infer a Boolean change merely because the heating rule applies."],
+      "known_support_risks": ["AI2-THOR setup routes for obtaining an initially cooked Potato may alter other facts; isolate and record them.", "A already-cooked object can still heat; cooked-state persistence and temperature need separate checks."], "references": []
+    },
+    {
+      "pair_id": "M03", "family": "microwave", "contrast_key": "bowl_isDirty_before_event", "strict_minimal_pair": true,
+      "event": {"action": "ToggleObjectOn", "target": "Microwave_1", "success_required": true, "shared": "Turn on the same microwave containing the same Bowl and uncooked Potato."},
+      "mechanism": "microwave_fact_type_selectivity",
+      "rules": {"common_initial_facts": ["Bowl and Potato are inside Microwave", "Microwave is off", "Potato is uncooked"], "A": ["Bowl.isDirty is true"], "B": ["Bowl.isDirty is false"], "change_candidate_facts": ["Microwave.isToggled", "Bowl temperature", "Potato temperature and cooked state"], "preserve_candidate_facts": ["Bowl.isDirty retains its actual pre-event value", "containment relations"], "flip_requirement": "This pair changes the value that must be preserved (dirty versus clean); it does not establish a same-target change/no-change flip for isDirty. The intended invariant is that heating does not itself change dirtiness."},
+      "observable_requirements": ["Expose the Bowl dirtiness history and event evidence.", "Keep fact identity attribute-specific: Bowl temperature and Bowl.isDirty are separate facts."],
+      "expectedchecks": ["Check temperature, cooked, and isDirty metadata independently before/after.", "Check that isDirty remains equal to its own before value in each variant; do not describe the dirty/clean contrast itself as a changed label.", "Verify shared Potato outcomes in A and B."],
+      "known_support_risks": ["Confirm heating does not trigger dirtiness changes in the chosen simulator version; if it does, update the design from metadata."], "references": []
+    },
+    {
+      "pair_id": "M04", "family": "microwave", "contrast_key": "cup_inside_microwave_at_activation_after_history", "strict_minimal_pair": true,
+      "event": {"action": "ToggleObjectOn", "target": "Microwave_1", "success_required": true, "shared": "After the recorded history, activate the same microwave containing Potato."},
+      "mechanism": "temporal_relation_revision_and_heating_boundary",
+      "rules": {"common_initial_facts": ["Potato is inside Microwave", "Microwave is off"], "A": ["Cup is placed inside Microwave before activation and remains there at activation"], "B": ["Cup was inside earlier, then is removed and placed on counter before activation"], "change_candidate_facts": ["Microwave.isToggled", "Potato heat/cooked state", "Cup temperature only while inside at activation"], "preserve_candidate_facts": ["Cup's actual location/containment at event time", "B's exterior Cup state"], "flip_requirement": "Only Cup's current containment at activation differs; B must include a history observation after removal so stale containment cannot be reused."},
+      "observable_requirements": ["Supply ordered history sufficient to establish B's removal before activation.", "Event frame establishes successful activation but need not reveal hidden final metadata."],
+      "expectedchecks": ["Verify Cup containment immediately before activation, not only at an earlier frame.", "Compare actual Cup temperature and location before/after.", "Ensure the Potato provides a common positive heating control."],
+      "known_support_risks": ["Cup heating depends on object/material support; choose an eligible object and verify.", "A single before/after pair may conceal the removal timing; include the intermediate history frame."], "references": []
+    },
+    {
+      "pair_id": "S05", "family": "stove", "contrast_key": "kettle_on_burner_controlled_by_activated_knob", "strict_minimal_pair": true,
+      "event": {"action": "ToggleObjectOn", "target": "StoveKnob_A", "success_required": true, "shared": "Activate Knob_A while both burners are initially off."},
+      "mechanism": "knob_to_burner_to_object_heating",
+      "rules": {"common_initial_facts": ["Burner_A and Burner_B are off", "Knob_A controls Burner_A"], "A": ["Kettle rests on Burner_A"], "B": ["Kettle rests on Burner_B"], "change_candidate_facts": ["Knob_A.isToggled", "Burner_A state", "Kettle temperature only if on active burner"], "preserve_candidate_facts": ["Burner_B remains off", "Kettle location/support relation"], "flip_requirement": "Change only which burner supports Kettle; retain the same activated knob and confirm the control mapping."},
+      "observable_requirements": ["History identifies knob-to-burner control mapping and Kettle support relation.", "Event evidence establishes successful knob activation."],
+      "expectedchecks": ["Verify Knob_A activation and actual corresponding burner metadata.", "Verify Kettle support and temperature before/after.", "Check that the inactive burner remains off and B's Kettle does not acquire a heat change."],
+      "known_support_risks": ["Scene may use non-obvious knob mapping; inspect object metadata/scene configuration.", "Burner-to-object heating may require exact placement and simulation steps."], "references": []
+    },
+    {
+      "pair_id": "S06", "family": "stove", "contrast_key": "kettle_contact_with_active_burner", "strict_minimal_pair": true,
+      "event": {"action": "ToggleObjectOn", "target": "StoveKnob_A", "success_required": true, "shared": "Activate Knob_A with Burner_A initially off."},
+      "mechanism": "contact_relation_gated_heating",
+      "rules": {"common_initial_facts": ["Knob_A controls Burner_A", "Burner_A is off"], "A": ["Kettle is supported by/on Burner_A"], "B": ["Kettle is on nearby counter and not in contact with Burner_A"], "change_candidate_facts": ["Knob_A and Burner_A state", "Kettle temperature if supported by active burner"], "preserve_candidate_facts": ["Kettle location/support relation", "nearby but non-contact Kettle remains unheated"], "flip_requirement": "Only effective support/contact relation changes; geometric proximity alone must not substitute for contact."},
+      "observable_requirements": ["History or scene metadata must distinguish support/contact from mere closeness.", "Provide successful activation evidence."],
+      "expectedchecks": ["Confirm Burner_A turns on.", "Check actual Kettle temperature delta and support relation.", "If B's placement is physically close enough to count as supported/contact, discard or reposition the design."],
+      "known_support_risks": ["Continuous physics may cause unintended contact or heating; verify geometry and metadata after settling."], "references": []
+    },
+    {
+      "pair_id": "S07", "family": "stove", "contrast_key": "activated_knob_identity", "strict_minimal_pair": false,
+      "event": {"action": "ToggleObjectOn", "target": {"A": "StoveKnob_A", "B": "StoveKnob_B"}, "success_required": true, "shared": "Toggle one knob on; both burners initially off and Kettle rests on Burner_A."},
+      "mechanism": "event_participant_binding_in_control_chain",
+      "rules": {"common_initial_facts": ["Kettle rests on Burner_A", "Burner_A and Burner_B are off", "Knob_A and Knob_B have distinct documented control targets"], "A": ["Event target is Knob_A"], "B": ["Event target is Knob_B"], "change_candidate_facts": ["target knob state", "its mapped burner state", "Kettle temperature only if Burner_A activates"], "preserve_candidate_facts": ["untargeted knob/burner remains off", "Kettle support relation"], "flip_requirement": "Action target changes, so this is not a strict minimal pair with an identical event participant. Analyze separately as target-binding contrast."},
+      "observable_requirements": ["Expose object identities and control mappings.", "The event observation must unambiguously identify which knob was operated."],
+      "expectedchecks": ["Check only the operated knob and mapped burner change as expected by actual metadata.", "Confirm the Kettle's burner and temperature delta.", "Mark as non-strict in pairwise aggregate reporting."],
+      "known_support_risks": ["Control mapping may differ across scenes; never assume A/B suffix semantics without checking."], "references": []
+    },
+    {
+      "pair_id": "W08", "family": "water", "contrast_key": "faucet_on_during_bowl_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "Bowl_1", "destination": "SinkBasin/water_contact_region", "success_required": true, "shared": "Place the same dirty empty Bowl at the verified water-contact location."},
+      "mechanism": "running_water_cleaning_and_container_filling",
+      "rules": {"common_initial_facts": ["Bowl is dirty and empty", "Bowl is not yet in sink contact region"], "A": ["Faucet is on and Bowl actually contacts running water after placement"], "B": ["Faucet is off"], "change_candidate_facts": ["Bowl location", "cleanliness in A", "filled state/liquid in A if supported"], "preserve_candidate_facts": ["Bowl identity and unrelated attributes", "Bowl remains dirty/empty in B unless metadata shows otherwise"], "flip_requirement": "Only faucet state should differ; A's contact with the running stream must be verified rather than inferred from SinkBasin membership."},
+      "observable_requirements": ["Show/record the placement event and faucet condition.", "Provide actual water-contact evidence or classify the causal condition as unknown."],
+      "expectedchecks": ["Check successful placement, cleanliness, liquid/fill metadata before and after.", "Check that fillability and capacity permit filling.", "Do not force an isFilled=false fact for an inapplicable or unsupported fillability property."],
+      "known_support_risks": ["SinkBasin membership may not mean water contact; faucet stream geometry and object eligibility vary."], "references": []
+    },
+    {
+      "pair_id": "W09", "family": "water", "contrast_key": "faucet_on_during_empty_clean_bowl_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "Bowl_1", "destination": "verified_water_contact_region", "success_required": true, "shared": "Place a clean, empty Bowl in the same water-contact region."},
+      "mechanism": "filling_precondition_with_cleanliness_already_true",
+      "rules": {"common_initial_facts": ["Bowl is clean and empty"], "A": ["Faucet on and Bowl contacts stream"], "B": ["Faucet off"], "change_candidate_facts": ["Bowl location", "filled/liquid state in A if actual metadata changes"], "preserve_candidate_facts": ["Bowl.isDirty remains false", "Bowl remains empty in B"], "flip_requirement": "Faucet state is the contrast; Clean is already true in both, so it cannot count as a newly achieved clean-state change."},
+      "observable_requirements": ["Establish clean/empty initial metadata and faucet state.", "Record exact fill/liquid fields and applicability."],
+      "expectedchecks": ["Verify if and how an empty Bowl is filled by running water.", "Check Bowl.isDirty stays false in both variants.", "Do not count the already-true clean condition as a change; do not create unsupported isFilled=false labels."],
+      "known_support_risks": ["Bowl filling may not be implemented for water or may depend on capacity/type; inspect actual metadata."], "references": []
+    },
+    {
+      "pair_id": "W10", "family": "water", "contrast_key": "faucet_on_during_dirty_water_filled_bowl_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "Bowl_1", "destination": "verified_water_contact_region", "success_required": true, "shared": "Place a dirty Bowl already filled with water in the same stream-contact region."},
+      "mechanism": "cleaning_precondition_with_fill_state_already_satisfied",
+      "rules": {"common_initial_facts": ["Bowl is dirty and contains water before event"], "A": ["Faucet on and Bowl contacts stream"], "B": ["Faucet off"], "change_candidate_facts": ["Bowl location", "cleanliness in A if metadata changes"], "preserve_candidate_facts": ["water-filled state in both", "B remains dirty"], "flip_requirement": "Faucet state is the contrast; filling is already satisfied in both and is not a new update candidate."},
+      "observable_requirements": ["Verify initial dirty and water-filled states, plus stream contact.", "Keep filling applicability separate from filled value."],
+      "expectedchecks": ["Check cleanliness and liquid metadata independently.", "Confirm A's actual cleaning result and that existing water remains as metadata reports.", "Do not treat the already-filled fact as newly changed or force unsupported isFilled=false."],
+      "known_support_risks": ["May be difficult to set a dirty water-filled Bowl without changing other initial conditions; log setup actions and verify exact state."], "references": []
+    },
+    {
+      "pair_id": "W11", "family": "water", "contrast_key": "faucet_on_during_dirty_plate_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "Plate_1", "destination": "verified_water_contact_region", "success_required": true, "shared": "Place the same dirty Plate in the water-contact region."},
+      "mechanism": "water_cleaning_without_container_filling_capability",
+      "rules": {"common_initial_facts": ["Plate is dirty", "Plate is not at water contact"], "A": ["Faucet on; Plate contacts stream"], "B": ["Faucet off"], "change_candidate_facts": ["Plate location", "cleanliness in A if supported"], "preserve_candidate_facts": ["No liquid-fill fact unless Plate is explicitly fillable and metadata supports it", "B remains dirty if metadata confirms"], "flip_requirement": "Only faucet state differs; test object capability boundary rather than assume every washable object is a fillable container."},
+      "observable_requirements": ["Establish dirty state and actual stream contact.", "Represent fillability as applicability/capability, not a false value when absent."],
+      "expectedchecks": ["Verify Plate cleanliness metadata before/after.", "Inspect whether fill-related fields apply; omit inapplicable isFilled rather than forcing false.", "Check for accidental contact/fill state changes."],
+      "known_support_risks": ["Water cleaning is object-dependent; Plate support must be confirmed in the exact simulator/version."], "references": []
+    },
+    {
+      "pair_id": "W12", "family": "water", "contrast_key": "shower_on_during_dirty_cloth_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "Cloth_1", "destination": "verified_shower_stream_region", "success_required": true, "shared": "Place dirty Cloth in the verified shower stream region."},
+      "mechanism": "cross_scene_running_water_cleaning_generalization",
+      "rules": {"common_initial_facts": ["Cloth is dirty and outside shower contact"], "A": ["ShowerHead is on and Cloth contacts stream"], "B": ["ShowerHead is off"], "change_candidate_facts": ["Cloth location", "cleanliness in A if supported"], "preserve_candidate_facts": ["B stays dirty if actual metadata confirms", "No container fill fact for Cloth"], "flip_requirement": "Only active water state differs; this tests transfer of cleaning behavior to a different source/room."},
+      "observable_requirements": ["Show shower and Cloth identities, operating state, and contact condition.", "State the mechanism rule only if this is a rule-provided protocol; otherwise keep hidden mechanism labels out of model input."],
+      "expectedchecks": ["Verify ShowerHead activation and Cloth-water contact.", "Check cleanliness metadata after execution.", "Do not assign fill attributes to Cloth."],
+      "known_support_risks": ["A shower may not implement the same cleaning mechanism as Faucet; confirm officially and empirically before retaining this pair."], "references": []
+    },
+    {
+      "pair_id": "C13", "family": "coffee_machine", "contrast_key": "coffee_machine_on_during_empty_mug_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "Mug_1", "destination": "CoffeeMachine_1", "success_required": true, "shared": "Place the same empty room-temperature Mug into the machine."},
+      "mechanism": "active_coffee_machine_fills_empty_mug_and_heats_contents",
+      "rules": {"common_initial_facts": ["Mug is empty and RoomTemp", "Mug is outside machine"], "A": ["CoffeeMachine is on"], "B": ["CoffeeMachine is off"], "change_candidate_facts": ["Mug location", "A mug liquid/filled state and temperature if actual metadata changes"], "preserve_candidate_facts": ["CoffeeMachine toggle state", "B mug empty/liquid/temperature unless actual metadata says otherwise"], "flip_requirement": "Only machine active state differs; both placement events must succeed identically."},
+      "observable_requirements": ["History establishes machine state and empty Mug.", "Event evidence confirms Mug is successfully placed into the intended device."],
+      "expectedchecks": ["Inspect before/after liquid identity, fill state, and temperature separately.", "Verify CoffeeMachine remains in its initial toggle state.", "Confirm B does not receive coffee merely from placement."],
+      "known_support_risks": ["Coffee machine may require exact object type, placement pose, or waiting steps; verify each state field."], "references": []
+    },
+    {
+      "pair_id": "C14", "family": "coffee_machine", "contrast_key": "mug_empty_before_active_machine_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "Mug_1", "destination": "CoffeeMachine_1", "success_required": true, "shared": "Place the Mug into the same already-on CoffeeMachine."},
+      "mechanism": "coffee_filling_gated_by_empty_container",
+      "rules": {"common_initial_facts": ["CoffeeMachine is on", "Mug is outside machine"], "A": ["Mug is empty"], "B": ["Mug is filled with Water"], "change_candidate_facts": ["Mug location", "liquid/fill state and temperature only as actually observed"], "preserve_candidate_facts": ["Machine remains on", "B's water must not be relabeled coffee unless metadata confirms an actual replacement"], "flip_requirement": "Only initial Mug contents differ. Do not assume heating or liquid replacement for B; use actual metadata."},
+      "observable_requirements": ["Prove the initial liquid and fill state for each Mug.", "Record all setup actions separately."],
+      "expectedchecks": ["Compare liquid identity, fill state, and temperature after successful placement.", "Treat B outcomes as simulator-determined; do not hard-code water-to-coffee conversion or Hot.", "Confirm the capacity/empty precondition is actually represented."],
+      "known_support_risks": ["A Mug already containing water may be rejected, replaced, heated, or unaffected depending on implementation; outcome must be observed."], "references": []
+    },
+    {
+      "pair_id": "C15", "family": "coffee_machine", "contrast_key": "mug_destination_in_or_out_of_active_coffee_machine", "strict_minimal_pair": false,
+      "event": {"action": "PutObject", "target": "Mug_1", "destination": {"A": "CoffeeMachine_1", "B": "CounterTop_near_machine"}, "success_required": true, "shared": "Place the same empty Mug while CoffeeMachine is on."},
+      "mechanism": "device_proximity_vs_membership_boundary",
+      "rules": {"common_initial_facts": ["CoffeeMachine is on", "Mug is empty"], "A": ["Destination is inside CoffeeMachine"], "B": ["Destination is nearby CounterTop, outside machine"], "change_candidate_facts": ["Mug location", "fill/liquid/temperature if machine interaction actually occurs"], "preserve_candidate_facts": ["CoffeeMachine remains on", "B remains empty absent another mechanism"], "flip_requirement": "Destination/action target changes; this is not a strict minimal pair. Analyze as a relation/destination contrast."},
+      "observable_requirements": ["Event must identify the different destinations unambiguously.", "History establishes identical machine state and Mug state."],
+      "expectedchecks": ["Verify both PutObject actions succeed and actual Mug destinations.", "Inspect fill/liquid/temperature results.", "Mark non-strict in pair validation and pairwise aggregate metrics."],
+      "known_support_risks": ["The machine interior may not be a valid PutObject receptacle in all scenes; B destination and geometry also need verification."], "references": []
+    },
+    {
+      "pair_id": "T16", "family": "toaster", "contrast_key": "toaster_on_during_breadsliced_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "BreadSliced_1", "destination": "Toaster_1", "success_required": true, "shared": "Place the same uncooked BreadSliced into the Toaster."},
+      "mechanism": "toaster_cooking_gated_by_power",
+      "rules": {"common_initial_facts": ["BreadSliced is uncooked and outside Toaster"], "A": ["Toaster is on"], "B": ["Toaster is off"], "change_candidate_facts": ["BreadSliced location", "isCooked if actual state changes"], "preserve_candidate_facts": ["Toaster initial on/off state", "BreadSliced containment after placement"], "flip_requirement": "Only Toaster on/off differs; retain the same BreadSliced type and placement event."},
+      "observable_requirements": ["Establish exact BreadSliced identity, initial cooked state, toaster state, and successful placement."],
+      "expectedchecks": ["Verify Toaster and BreadSliced metadata before/after.", "Check event succeeds and containment holds in both variants.", "Do not assume cooking solely from rule description."],
+      "known_support_risks": ["Use BreadSliced, not Bread; verify toaster interaction and timing in the exact version."], "references": []
+    },
+    {
+      "pair_id": "T17", "family": "toaster", "contrast_key": "bread_inside_toaster_when_toaster_activated", "strict_minimal_pair": true,
+      "event": {"action": "ToggleObjectOn", "target": "Toaster_1", "success_required": true, "shared": "Turn on the same initially-off Toaster."},
+      "mechanism": "toaster_activation_with_containment_boundary",
+      "rules": {"common_initial_facts": ["Toaster is off", "BreadSliced is uncooked"], "A": ["BreadSliced is inside Toaster"], "B": ["BreadSliced is on counter and Toaster is empty"], "change_candidate_facts": ["Toaster toggle state", "BreadSliced.isCooked if within toaster"], "preserve_candidate_facts": ["BreadSliced location in each variant", "B BreadSliced remains uncooked if metadata confirms"], "flip_requirement": "Only BreadSliced containment at activation differs; same Toaster operation."},
+      "observable_requirements": ["History proves containment at event time, especially B's exterior position.", "Event frame establishes successful Toaster activation."],
+      "expectedchecks": ["Verify toggle and cooked state before/after.", "Check whether activation actually starts cooking and under what delay.", "Confirm exterior BreadSliced does not cook due only to proximity."],
+      "known_support_risks": ["Toaster may require a separate start action or time advancement; verify action semantics."], "references": []
+    },
+    {
+      "pair_id": "T18", "family": "toaster", "contrast_key": "bread_isCooked_before_active_toaster_placement", "strict_minimal_pair": true,
+      "event": {"action": "PutObject", "target": "BreadSliced_1", "destination": "Toaster_1", "success_required": true, "shared": "Place BreadSliced into the same already-on Toaster."},
+      "mechanism": "toaster_cooking_with_already_satisfied_boolean",
+      "rules": {"common_initial_facts": ["Toaster is on", "BreadSliced is outside Toaster"], "A": ["BreadSliced.isCooked is false"], "B": ["BreadSliced.isCooked is true before event"], "change_candidate_facts": ["BreadSliced location", "isCooked only if actual value changes"], "preserve_candidate_facts": ["B's already-true isCooked remains true if actual metadata confirms"], "flip_requirement": "Only initial cooked value differs. B's already-true cooked state is not a change; do not count rule applicability as an actual Boolean flip."},
+      "observable_requirements": ["Expose pre-event cooked value and successful placement evidence.", "Keep location change and cooked-state change as separate facts."],
+      "expectedchecks": ["Check actual before/after isCooked values and location.", "Ensure B is truly cooked at event time.", "Do not label B as newly cooked just because the cooking mechanism applies."],
+      "known_support_risks": ["Setup for already-cooked bread may have side effects; verify initial state and record preparation separately."], "references": []
+    },
+    {
+      "pair_id": "B19", "family": "broken_device", "contrast_key": "laptop_isToggled_before_break", "strict_minimal_pair": true,
+      "event": {"action": "BreakObject", "target": "Laptop_1", "success_required": true, "shared": "Break the same undamaged Laptop while holding position and lid state fixed."},
+      "mechanism": "breakage_conditionally_turns_on_device_off",
+      "rules": {"common_initial_facts": ["Laptop is unbroken", "Laptop position and isOpen value are matched"], "A": ["Laptop.isToggled is true"], "B": ["Laptop.isToggled is false"], "change_candidate_facts": ["Laptop.isBroken", "Laptop.isToggled in A if breakage forces shutdown"], "preserve_candidate_facts": ["B's already-off toggle state", "isOpen and position if actual execution leaves them unchanged"], "flip_requirement": "Only prior on/off value differs; same break action. Verify both the direct broken-state change and conditional toggle result."},
+      "observable_requirements": ["History provides pre-break toggle, broken, open, and position facts.", "Event evidence confirms successful BreakObject."],
+      "expectedchecks": ["Inspect isBroken/isToggled/isOpen and position before/after.", "Use actual metadata to determine whether the lid or position changed; do not presume preservation if execution differs.", "Check the off variant is already off and is not mislabeled as newly switched off."],
+      "known_support_risks": ["BreakObject support and auto-shutdown may be object/version-specific; verify on Laptop in selected scene."], "references": []
+    },
+    {
+      "pair_id": "P20", "family": "pickup_carry", "contrast_key": "apple_supported_by_plate_at_pickup", "strict_minimal_pair": true,
+      "event": {"action": "PickupObject", "target": "Plate_1", "success_required": true, "shared": "Pick up the same Plate while Apple starts nearby."},
+      "mechanism": "support_relation_carries_supported_object",
+      "rules": {"common_initial_facts": ["Plate is pick-up-able", "Apple and Plate are in matched initial positions as far as feasible"], "A": ["Apple rests on Plate and is supported by it"], "B": ["Apple is on nearby counter, not supported by Plate"], "change_candidate_facts": ["Plate location/held state", "Apple location in A if carried by simulator"], "preserve_candidate_facts": ["Apple remains at original location in B", "A support relation remains valid only if simulator metadata models it"], "flip_requirement": "Only support relation is intended to differ; verify both pickup success and actual Apple displacement."},
+      "observable_requirements": ["History establishes Apple support versus nearby non-support.", "Event frame identifies Plate pickup and resulting held state."],
+      "expectedchecks": ["Check PickupObject success and before/after positions for Plate and Apple.", "Confirm the simulator actually carries supported contents; do not infer from ordinary physical intuition.", "Retain as a simple propagation control; report separately if carrying semantics are not supported."],
+      "known_support_risks": ["Pick-up mechanics may constrain contained/supporting objects or require a receptacle type; verify exact scene and action outcome."], "references": []
+    }
+  ]
+}

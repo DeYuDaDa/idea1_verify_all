@@ -1,0 +1,8 @@
+ai2thor==5.0.0
+numpy==1.23.5
+opencv-python==4.8.1.78
+Flask==2.2.5
+Werkzeug==2.2.3
+Pillow==10.4.0
+imageio==2.34.2
+imageio-ffmpeg==0.5.1
