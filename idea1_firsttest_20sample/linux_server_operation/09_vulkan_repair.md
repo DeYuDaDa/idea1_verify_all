@@ -1,5 +1,7 @@
 # 2026-10-18：第 03 步缺少 Vulkan 库
 
+**最新进展：** 上传的 `20261017T164735Z_09_fix_vulkan.log` 已确认 loader 安装完成且可加载，后续失败在 NVIDIA ICD 初始化。已有该结果的服务器请改用 [第 10 步诊断](10_nvidia_icd_diagnosis.md)，不要重复本页安装命令。以下保留供仍缺少 loader 的机器参考。
+
 已根据上传日志确认：Python 3.10 与 ai2thor 5.0.0 安装完成；服务器的 18 项单元测试通过。第 03 步在 `CloudRendering.validate` 阶段提示 `Vulkan API driver missing`，并要求安装 `libvulkan1`。日志没有证明显卡驱动损坏，也尚未证明 Unity 能启动。
 
 这不是 Python 依赖重装问题。先安装系统 Vulkan loader，再确认容器能实际枚举 NVIDIA Vulkan 设备。脚本只安装 `libvulkan1`、`vulkan-tools`，不重装 CUDA、NVIDIA 内核驱动，不改容器运行参数，也不生成数据。
