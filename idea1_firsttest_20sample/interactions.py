@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 from collections import Counter
+from collections.abc import Mapping
 import time
 from typing import Any
 
@@ -343,40 +344,64 @@ class Interactions:
         )
 
     @staticmethod
+    def _bbox_from_detection(raw: Any) -> dict[str, float] | None:
+        """Normalize AI2-THOR's lazy Mapping bbox and common array formats."""
+        if isinstance(raw, Mapping):
+            if all(key in raw for key in ("x", "y", "width", "height")):
+                return {key: float(raw[key]) for key in ("x", "y", "width", "height")}
+            if all(key in raw for key in ("x1", "y1", "x2", "y2")):
+                x1, y1, x2, y2 = (float(raw[key]) for key in ("x1", "y1", "x2", "y2"))
+                return {"x": x1, "y": y1, "width": x2-x1, "height": y2-y1}
+            if all(key in raw for key in ("xmin", "ymin", "xmax", "ymax")):
+                x1, y1, x2, y2 = (float(raw[key]) for key in ("xmin", "ymin", "xmax", "ymax"))
+                return {"x": x1, "y": y1, "width": x2-x1+1, "height": y2-y1+1}
+            return None
+        if isinstance(raw, (str, bytes)) or raw is None:
+            return None
+        try:
+            if len(raw) != 4:
+                return None
+            x1, y1, x2, y2 = (float(raw[index]) for index in range(4))
+        except (IndexError, KeyError, TypeError, ValueError):
+            return None
+        # AI2-THOR 5.0.0 LazyInstanceDetections2D returns inclusive
+        # (xmin, ymin, xmax, ymax) coordinates as a tuple/array-like value.
+        return {"x": x1, "y": y1, "width": x2-x1+1, "height": y2-y1+1}
+
+    @staticmethod
     def _rendered_target_bbox(result: StepResult, object_id: str) -> dict[str, float] | None:
         """Return a nontrivial, non-edge bbox backed by rendered event data."""
         event = result.event
         detections = getattr(event, "instance_detections2D", None)
-        if not detections:
+        if detections is None:
             detections = result.metadata.get("instance_detections2D")
-        bbox: dict[str, float] | None = None
-        if isinstance(detections, dict):
-            raw = detections.get(object_id)
-            if isinstance(raw, dict):
-                if all(k in raw for k in ("x", "y", "width", "height")):
-                    bbox = {k: float(raw[k]) for k in ("x", "y", "width", "height")}
-                elif all(k in raw for k in ("x1", "y1", "x2", "y2")):
-                    bbox = {"x": float(raw["x1"]), "y": float(raw["y1"]),
-                            "width": float(raw["x2"])-float(raw["x1"]),
-                            "height": float(raw["y2"])-float(raw["y1"])}
-            elif isinstance(raw, (list, tuple)) and len(raw) == 4:
-                x1, y1, x2, y2 = map(float, raw)
-                bbox = {"x": x1, "y": y1, "width": x2-x1, "height": y2-y1}
+        bbox = None
+        if isinstance(detections, Mapping):
+            try:
+                bbox = Interactions._bbox_from_detection(detections[object_id])
+            except (KeyError, IndexError, TypeError, ValueError):
+                pass
 
         frame = getattr(event, "frame", None)
         height = int(frame.shape[0]) if frame is not None else 0
         width = int(frame.shape[1]) if frame is not None else 0
         if bbox is None:
             masks = getattr(event, "instance_masks", None)
-            mask = masks.get(object_id) if isinstance(masks, dict) else None
+            try:
+                mask = masks[object_id] if isinstance(masks, Mapping) else None
+            except (KeyError, IndexError, TypeError, ValueError):
+                mask = None
             if mask is not None and getattr(mask, "ndim", 0) >= 2:
-                rows, cols = mask.nonzero()[:2]
-                if len(cols):
-                    x1, x2 = int(cols.min()), int(cols.max()) + 1
-                    y1, y2 = int(rows.min()), int(rows.max()) + 1
-                    bbox = {"x": float(x1), "y": float(y1),
-                            "width": float(x2-x1), "height": float(y2-y1)}
-                    height, width = int(mask.shape[0]), int(mask.shape[1])
+                try:
+                    rows, cols = mask.nonzero()[:2]
+                    if len(cols) and len(rows):
+                        x1, x2 = int(cols.min()), int(cols.max()) + 1
+                        y1, y2 = int(rows.min()), int(rows.max()) + 1
+                        bbox = {"x": float(x1), "y": float(y1),
+                                "width": float(x2-x1), "height": float(y2-y1)}
+                        height, width = int(mask.shape[0]), int(mask.shape[1])
+                except (AttributeError, IndexError, TypeError, ValueError):
+                    bbox = None
         if bbox is None or width <= 0 or height <= 0:
             return None
         x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]

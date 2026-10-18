@@ -2,7 +2,7 @@
 
 本步只校准观察姿态，不生成样本、不读取 hidden gold、不启动模型推理，也不安装依赖。脚本在一个 AI2-THOR Controller 中依次处理 FloorPlan5 的 CoffeeMachine、FloorPlan201 的 Laptop、FloorPlan9 的 Microwave；每个场景会重置到初始状态。Laptop 和 Microwave 若报告 `openable=True` 且当前关闭，会先记录并执行开门 setup，以匹配已检查的观察条件。
 
-每个目标保存原生 `GetInteractablePoses` 首姿态下的 RGB 和 instance mask，以及根据真实 `cameraPosition - agent.position` 高度差、目标 `axisAlignedBoundingBox.center` 重新计算 yaw/horizon 后的 RGB 和 mask。随后调用真正的 `Interactions.look`，另存 validated RGB/mask 和目标框，并在结果中记录 pass/fail。目标框取自 rendered instance detections，若不可用再从 instance mask 计算；metadata 的 `visible` 字段不作为画面可见证明。每场景 `metadata.json` 记录目标、agent/camera metadata、各阶段 bbox、错误和耗时，并有 `action_log.json`；总 `manifest.json` 汇总三场景状态和总耗时。场景失败会记录后继续下一场景，最终以非零退出码报告失败。
+每个目标保存原生 `GetInteractablePoses` 首姿态下的 RGB 和 instance mask，以及根据真实 `cameraPosition - agent.position` 高度差、目标 `axisAlignedBoundingBox.center` 重新计算 yaw/horizon 后的 RGB 和 mask。随后调用真正的 `Interactions.look`，另存 validated RGB/mask 和目标框，并在结果中记录 pass/fail。目标框取自 rendered instance detections，若不可用再从 instance mask 计算；metadata 的 `visible` 字段不作为画面可见证明。每场景 `metadata.json` 记录目标、agent/camera metadata、各阶段 bbox、错误和耗时，并有 `action_log.json`；总 `manifest.json` 汇总三场景状态和总耗时，并写入本次 `runtime.py`、`interactions.py`、`camera_probe.py` 的 SHA-256，供后续验证运行来源。场景失败会记录后继续下一场景，最终以非零退出码报告失败。
 
 ## 运行
 

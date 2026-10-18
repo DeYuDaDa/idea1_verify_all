@@ -1,5 +1,6 @@
 import math
 import unittest
+from collections.abc import Mapping
 
 from interactions import Interactions
 from runtime import ControllerSession, StepResult
@@ -164,6 +165,90 @@ class CameraGeometryTests(unittest.TestCase):
 
         result = Interactions(FakeSession()).look("Target|1")
         self.assertEqual(result.record["look_pose_candidate"], "geometric")
+
+    def test_lazy_mapping_and_array_like_detection_bbox(self):
+        class LazyMap(Mapping):
+            def __init__(self, values):
+                self.values = values
+
+            def __getitem__(self, key):
+                return self.values[key]
+
+            def __iter__(self):
+                return iter(self.values)
+
+            def __len__(self):
+                return len(self.values)
+
+        class ArrayLike:
+            def __init__(self, values):
+                self.values = values
+
+            def __len__(self):
+                return len(self.values)
+
+            def __getitem__(self, index):
+                return self.values[index]
+
+        class Frame:
+            shape = (240, 320, 3)
+
+        class DetectionEvent:
+            frame = Frame()
+            instance_detections2D = LazyMap({"Target|1": ArrayLike((40, 50, 120, 110))})
+            instance_masks = LazyMap({})
+
+        result = StepResult(event=DetectionEvent(), metadata={}, record={})
+        bbox = Interactions._rendered_target_bbox(result, "Target|1")
+        self.assertEqual(bbox, {"x": 40.0, "y": 50.0, "width": 81.0, "height": 61.0})
+
+    def test_lazy_mapping_instance_masks_are_read_without_metadata_visible(self):
+        class LazyMap(Mapping):
+            def __init__(self, values):
+                self.values = values
+
+            def __getitem__(self, key):
+                return self.values[key]
+
+            def __iter__(self):
+                return iter(self.values)
+
+            def __len__(self):
+                return len(self.values)
+
+        class Axis:
+            def __init__(self, values):
+                self.values = values
+
+            def __len__(self):
+                return len(self.values)
+
+            def min(self):
+                return min(self.values)
+
+            def max(self):
+                return max(self.values)
+
+        class Mask:
+            ndim = 2
+            shape = (240, 320)
+
+            def nonzero(self):
+                return Axis([60, 130]), Axis([70, 150])
+
+        class Frame:
+            shape = (240, 320, 3)
+
+        class Event:
+            frame = Frame()
+            instance_detections2D = LazyMap({})
+            instance_masks = LazyMap({"Target|1": Mask()})
+
+        result = StepResult(event=Event(), metadata={"visible": True}, record={})
+        self.assertEqual(
+            Interactions._rendered_target_bbox(result, "Target|1"),
+            {"x": 70.0, "y": 60.0, "width": 81.0, "height": 71.0},
+        )
 
 
 if __name__ == "__main__":

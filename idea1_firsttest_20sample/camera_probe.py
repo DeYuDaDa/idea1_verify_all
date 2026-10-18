@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ import time
 from typing import Any
 
 from interactions import Interactions
-from runtime import ControllerSession
+from runtime import ControllerSession, StepResult
 
 
 CASES = [
@@ -33,28 +34,9 @@ def jsonable(value: Any) -> Any:
 
 
 def bbox_for(event: Any, metadata: dict[str, Any], object_id: str) -> dict[str, float] | None:
-    detections = getattr(event, "instance_detections2D", None) or metadata.get("instance_detections2D")
-    raw = detections.get(object_id) if isinstance(detections, dict) else None
-    if isinstance(raw, dict):
-        if all(key in raw for key in ("x", "y", "width", "height")):
-            return {key: float(raw[key]) for key in ("x", "y", "width", "height")}
-        if all(key in raw for key in ("x1", "y1", "x2", "y2")):
-            return {"x": float(raw["x1"]), "y": float(raw["y1"]),
-                    "width": float(raw["x2"])-float(raw["x1"]),
-                    "height": float(raw["y2"])-float(raw["y1"])}
-    if isinstance(raw, (list, tuple)) and len(raw) == 4:
-        x1, y1, x2, y2 = map(float, raw)
-        return {"x": x1, "y": y1, "width": x2-x1, "height": y2-y1}
-    masks = getattr(event, "instance_masks", None)
-    mask = masks.get(object_id) if isinstance(masks, dict) else None
-    if mask is not None and getattr(mask, "ndim", 0) >= 2:
-        rows, cols = mask.nonzero()[:2]
-        if len(cols):
-            x1, x2 = int(cols.min()), int(cols.max()) + 1
-            y1, y2 = int(rows.min()), int(rows.max()) + 1
-            return {"x": float(x1), "y": float(y1),
-                    "width": float(x2-x1), "height": float(y2-y1)}
-    return None
+    return Interactions._rendered_target_bbox(
+        StepResult(event=event, metadata=metadata, record={}), object_id
+    )
 
 
 def relevant_snapshot(metadata: dict[str, Any], target: dict[str, Any]) -> dict[str, Any]:
@@ -89,6 +71,11 @@ def main() -> int:
                         default=os.environ.get("THOR_PLATFORM", "CloudRendering"))
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
+    source_root = Path(__file__).resolve().parent
+    source_sha256 = {
+        name: hashlib.sha256((source_root / name).read_bytes()).hexdigest()
+        for name in ("runtime.py", "interactions.py", "camera_probe.py")
+    }
     case_manifest: list[dict[str, Any]] = []
     started = time.monotonic()
     session = None
@@ -215,7 +202,6 @@ def main() -> int:
                                   if validation_result is not None else None)
                 validated = None
                 if validation_event is not None and getattr(validation_event, "frame", None) is not None:
-                    from runtime import StepResult
                     validated_result = StepResult(validation_event, validation_meta, validation_record)
                     validation_files = session.save_pngs(validated_result, case_dir, stem="validated_look")
                     validated = {
@@ -260,7 +246,8 @@ def main() -> int:
     total_elapsed = round(time.monotonic() - started, 3)
     manifest = {"status": "passed" if all(row.get("status") == "passed" for row in case_manifest)
                 and len(case_manifest) == len(CASES) else "failed",
-                "elapsed_seconds": total_elapsed, "cases": case_manifest}
+                "elapsed_seconds": total_elapsed, "source_sha256": source_sha256,
+                "cases": case_manifest}
     (args.out / "manifest.json").write_text(
         json.dumps(jsonable(manifest), ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"output": str(args.out), "status": manifest["status"],
