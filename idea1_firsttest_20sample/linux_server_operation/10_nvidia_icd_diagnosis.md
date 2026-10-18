@@ -1,5 +1,7 @@
 # 第 10 步：只读诊断 NVIDIA Vulkan ICD
 
+**该服务器的最新结果：** `20261017T172728Z/diagnosis_report.json` 确认 `libGLX_nvidia.so.0` 指向真实 580.105.08 ELF，`ldd` 没有未找到的依赖，且同版本 gpucomp 已映射到进程。环境覆盖为空；清理环境和私有绝对路径 ICD 均失败，接口协商返回 `-3`。不要重复本页测试，改执行 [第 11 步初始化跟踪](11_vulkan_init_trace.md)。这仍不证明全部运行时依赖完整，也不证明 595 空文件是根因。
+
 最新的第 09 步日志显示：宿主 NVIDIA 驱动为 580.105.08，Vulkan loader 已可加载，`nvidia-smi` 可看到 RTX 4090，系统注册了 580 系列 graphics 库，但 `vulkaninfo` 无法通过 `vk_icdGetInstanceProcAddr` 取得 `vkCreateInstance`。日志还提示大量 595.71.05 库文件为零字节。零字节文件是需要追查的线索，单凭它不能断定本次 ICD 失败的根因。
 
 ## 只运行诊断

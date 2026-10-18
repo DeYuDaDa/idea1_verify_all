@@ -1,6 +1,6 @@
 # 首次运行说明（Linux 服务器）
 
-2026-10-18 最新服务器日志：安装与 18 项测试通过；09 已装好 Vulkan loader，目前 NVIDIA ICD 无法创建 Vulkan 实例。已有这一结果的机器请直接执行 [NVIDIA ICD 诊断](10_nvidia_icd_diagnosis.md)，无需重复下面的完整首次流程，也不必重新安装 loader。
+2026-10-18 最新服务器日志：安装与 18 项测试通过；loader 正常，第 10 步已确认实际加载同版本 580.105.08 图形入口与 gpucomp，但初始化仍失败。已有这一结果的机器请直接执行 [NVIDIA 初始化跟踪](11_vulkan_init_trace.md)，无需重复首次流程或第 09、10 步。
 
 此文档中的命令只在服务器执行。先把代码同步到 `/root/idea1_verify_all/idea1_firsttest_20sample`，并确认测试文件已经由负责的开发者提交且完成 review。Windows 机器只用于编辑代码。
 

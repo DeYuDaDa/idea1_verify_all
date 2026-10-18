@@ -31,9 +31,10 @@ Run each file with `bash path/to/stage.sh`; executable-bit changes are not neede
 8. `06a_prepare_review.sh` creates a review form; `06b_apply_review.sh FORM REVIEWER` records a completed review. `07_package_offline.sh [EXPORT_ROOT] [OUTPUT_FILE] [PAIRS]` packages only public input data, optionally for a reviewed subset. Defaults are the export root and `$DATA_ROOT/offline_public_input.zip`.
 9. `09_fix_vulkan.sh` installs only `libvulkan1` and `vulkan-tools`, then checks actual NVIDIA enumeration. Its `--check-only` mode does not install packages. The latest server log confirms the loader is ready but ICD initialization fails; follow `10_nvidia_icd_diagnosis.md` for that machine.
 10. `10_diagnose_nvidia_icd.sh` collects library, ICD and isolated loader probes. It writes diagnostic files outside Git; it does not install packages, rewrite system driver configuration or start Unity.
+11. `11_trace_vulkan_init.sh` follows initialization-time library and device access after stage 10 has ruled out the basic path and gpucomp hypotheses. See `11_vulkan_init_trace.md` for the next command and optional strace installation. It does not install NVIDIA drivers or launch Unity.
 
 See `08_after_smoke.md` for the pilot inspection/review/package sequence and the full-generation command.
 
 For first-run commands, use `00_start_here.md`. Recommended order: preflight, environment setup, reviewed unit checks, smoke, pilot, inspect and validate the pilot, then decide whether to run the full generation stage. Validate again before packaging. A pilot is intentionally separate from the full run.
 
-If a stage fails, its command output remains in that stage's log. Resolve the reported prerequisite or simulator error and rerun the relevant stage. Only stage 09 may invoke `apt` (through root or noninteractive `sudo`) for the two stated Vulkan packages. No stage installs NVIDIA kernel drivers or evaluates shell code from environment values.
+If a stage fails, its command output remains in that stage's log. Resolve the reported prerequisite or simulator error and rerun the relevant stage. Stage 09 may invoke `apt` for the two stated Vulkan packages; stage 11 may install only `strace` when explicitly requested with its documented option. These use root or noninteractive `sudo`. No stage installs NVIDIA kernel drivers or evaluates shell code from environment values.
