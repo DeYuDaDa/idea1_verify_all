@@ -1,6 +1,6 @@
 # 首次运行说明（Linux 服务器）
 
-2026-10-18 最新服务器日志：安装与 18 项测试通过；loader 正常，第 11 步明确记录 NVIDIA 初始化动态加载 `libEGL.so.1` 时各路径均不存在。已有这一结果的机器请直接执行 [第 12 步 EGL 修复](12_egl_repair.md)，无需重复首次流程或第 09—11 步。
+2026-10-18 最新服务器日志：安装与 18 项测试通过，第 12 步已补齐 EGL，Vulkan 正常枚举 RTX 4090。目前卡在约 797 MiB 的模拟器构建包下载中断。已有这一结果的机器请直接执行 [第 13 步构建包准备](13_thor_build.md)，不重跑环境安装或图形库修复。
 
 此文档中的命令只在服务器执行。先把代码同步到 `/root/idea1_verify_all/idea1_firsttest_20sample`，并确认测试文件已经由负责的开发者提交且完成 review。Windows 机器只用于编辑代码。
 
@@ -10,15 +10,16 @@
 - 不推送到 Git 的输出：`/root/will_not_be_push_to_git/idea1_firsttest_20sample`
 - 数据集导出目录：`/root/will_not_be_push_to_git/idea1_firsttest_20sample/exports`
 
-首次建议只运行预检、环境、单元检查和 smoke。下面是一条连续命令：任一阶段失败时，`&&` 会停止后续阶段。复制后在服务器终端执行：
+首次先运行预检、环境和单元检查。下面任一阶段失败时，`&&` 会停止后续阶段：
 
 ```bash
 cd /root/idea1_verify_all/idea1_firsttest_20sample && \
 bash linux_server_operation/00_preflight.sh && \
 bash linux_server_operation/01_setup_env.sh && \
-bash linux_server_operation/02_unit_checks.sh && \
-bash linux_server_operation/03_smoke.sh FloorPlan1
+bash linux_server_operation/02_unit_checks.sh
 ```
+
+接着单独按 [构建包准备](13_thor_build.md) 下载或导入构建包，完成校验后再执行 `bash linux_server_operation/03_smoke.sh FloorPlan1`。下载与启动分开，避免把大文件下载耗时误认为模拟器启动卡住。
 
 如 Conda 不在 PATH 或常见安装路径，可把 `CONDA_EXE=/绝对路径/conda` 加在具体命令前。若使用其他环境名或输出路径，也可在命令前设置 `CONDA_ENV=...`、`DATA_ROOT=...`；CloudRendering 默认值为 `THOR_PLATFORM`。每阶段的日志和预检机器报告都会写到 `$DATA_ROOT/logs`，默认位于上述 Git 外输出目录。
 

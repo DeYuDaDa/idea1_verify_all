@@ -1,6 +1,6 @@
 # 首轮 20 组事实影响范围诊断
 
-本目录是实验代码，不是已经生成的数据集。设计为 20 组 A/B 配对、40 条场景记录。2026-10-18 最新服务器日志确认：依赖安装和 18 项单元测试通过，Vulkan loader 已安装且可加载；目前失败在 NVIDIA Vulkan 设备枚举，尚未启动模拟器或生成数据。Windows 端不运行 Python、测试、模拟器或安装环境。
+本目录是实验代码，不是已经生成的数据集。设计为 20 组 A/B 配对、40 条场景记录。2026-10-18 最新服务器日志确认：依赖安装和 18 项单元测试通过，EGL 已补齐，Vulkan 成功枚举 NVIDIA RTX 4090。当前阻塞是约 797 MiB 的 CloudRendering 构建包下载中断；Unity 尚未启动，未生成数据。Windows 端不运行 Python、测试、模拟器或安装环境。
 
 ## 路径约定
 
@@ -16,7 +16,7 @@
 
 同步代码后，按 [首轮服务器命令](linux_server_operation/00_start_here.md) 执行前四步。命令、可选参数、后续生成和打包操作全部放在 `linux_server_operation/`。本 README 不要求在 Windows 执行任何项目命令。
 
-第 11 步已找到明确缺失：NVIDIA 初始化时动态加载 `libEGL.so.1`，各系统路径均返回 ENOENT。已有该结果的服务器直接按 [第 12 步 EGL 修复](linux_server_operation/12_egl_repair.md) 操作，安装提供该文件的 `libegl1` 及必需依赖，确认 NVIDIA 枚举成功后再试启动。复用现有 Conda 环境，不重跑前面的安装、测试与诊断。
+第 12 步的系统修复已成功，长时间消耗在随后启动的构建包下载，异常为 `IncompleteRead` / `ChunkedEncodingError`。已有该结果的服务器改按 [第 13 步构建包准备](linux_server_operation/13_thor_build.md) 操作，支持限时续传或手动上传完整 ZIP；校验并安装缓存后，再单独试启动。不重装环境或图形库。
 
 首轮顺序是环境检查、独立 Conda 环境、单元测试、模拟器试启动。成功后再运行六组试生成；不要先启动全部 40 条。任何一步失败都先保留该阶段日志，不需要继续执行后续阶段。
 

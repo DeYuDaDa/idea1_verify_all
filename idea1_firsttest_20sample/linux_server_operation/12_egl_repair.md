@@ -1,5 +1,7 @@
 # 第 12 步：补齐 EGL loader 并验证 NVIDIA Vulkan
 
+**该服务器已执行完成系统修复：** `20261018T042328Z` 日志确认 EGL 能加载，`vulkaninfo` 退出 0 并枚举 NVIDIA RTX 4090。后续失败是第 03 步从网络下载约 797 MiB 构建包时连接中断，不是 EGL 或 Vulkan 再次失败。请转到 [第 13 步构建包准备](13_thor_build.md)，不重复本页安装流程。新版第 03 步会先检查本地缓存，避免隐式进入长时间下载。
+
 第 11 步发现 NVIDIA GLX 初始化缺少 `libEGL.so.1`，其余已检查的 580 图形库与 `gpucomp` 可加载。Ubuntu Jammy 的 `libegl1` 提供这个 loader，并会安装包管理器声明的必需依赖（包括 Mesa EGL）；这不等于安装 NVIDIA 驱动。参考 [Ubuntu libegl1 文件列表](https://packages.ubuntu.com/jammy/amd64/libegl1/filelist) 和 [libegl1 依赖信息](https://packages.ubuntu.com/jammy/amd64/libegl1)。
 
 同步代码后，在服务器执行推荐命令：
