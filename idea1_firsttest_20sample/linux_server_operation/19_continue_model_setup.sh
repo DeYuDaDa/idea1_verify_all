@@ -88,7 +88,7 @@ if [[ ! -x "$ENV_PREFIX/bin/python" ]]; then
   fi
 fi
 ENV_PYTHON="$ENV_PREFIX/bin/python"
-EXPECTED='{"torch":"2.10.0+cu128","transformers":"5.15.0","accelerate":"1.11.0","Pillow":"11.3.0"}'
+EXPECTED='{"torch":"2.10.0+cu128","torchvision":"0.25.0+cu128","transformers":"5.15.0","accelerate":"1.11.0","Pillow":"11.3.0"}'
 set +e
 versions_json="$("$ENV_PYTHON" - "$EXPECTED" <<'PY'
 import importlib.metadata as md, json, sys
@@ -113,6 +113,7 @@ if [[ "$conflict_count" != 0 ]]; then
   die "Conflicting installed versions; no upgrade/reinstall attempted. Review $report"
 fi
 installed_torch="$("$ENV_PYTHON" -c 'import json,sys; print(json.loads(sys.argv[1])["installed"].get("torch") or "")' "$versions_json")"
+missing_torchvision="$("$ENV_PYTHON" -c 'import json,sys; x=json.loads(sys.argv[1])["installed"]; print("" if x.get("torchvision") else "torchvision")' "$versions_json")"
 missing_regular="$("$ENV_PYTHON" -c 'import json,sys; x=json.loads(sys.argv[1])["installed"]; print(" ".join(k for k in ("transformers","accelerate","Pillow") if not x.get(k)))' "$versions_json")"
 missing_math="$("$ENV_PYTHON" - <<'PY'
 import importlib.metadata as md
@@ -188,6 +189,18 @@ if [[ -s "$torch_requirements" ]]; then
     die "Torch dependency repair failed; see $bundle"
   fi
 fi
+if [[ -n "$missing_torchvision" ]]; then
+  note "Installing only pinned torchvision from the recovered wheelhouse first; --no-deps preserves the already pinned torch and its CUDA libraries."
+  if ! "$ENV_PYTHON" -m pip install --cache-dir "$PIP_CACHE" --no-index --find-links "$WHEELHOUSE" \
+      --no-deps 'torchvision==0.25.0+cu128'; then
+    note "No usable matching torchvision wheel was recovered; fetching that exact wheel from the official cu128 index."
+    if ! "$ENV_PYTHON" -m pip install --cache-dir "$PIP_CACHE" --index-url https://download.pytorch.org/whl/cu128 \
+        --no-deps 'torchvision==0.25.0+cu128'; then
+      package_evidence torchvision_wheel_install_failed "Could not install the pinned torchvision CUDA 12.8 wheel from recovered cache or official cu128 index." yes
+      die "Pinned torchvision installation failed; see $bundle"
+    fi
+  fi
+fi
 if [[ -n "$missing_regular" ]]; then
   note "Installing missing pinned application packages and ordinary dependencies from PyPI: $missing_regular"
   if ! "$ENV_PYTHON" -m pip install --cache-dir "$PIP_CACHE" --find-links "$WHEELHOUSE" --index-url https://pypi.org/simple \
@@ -197,7 +210,7 @@ if [[ -n "$missing_regular" ]]; then
   fi
 fi
 
-package_evidence runtime_probe_recorded "No targeted install process was active; missing pinned packages were repaired from the designated indexes." yes
+package_evidence runtime_probe_recorded "No targeted install process was active; missing pinned packages were repaired from their designated sources." yes
 if "$ENV_PYTHON" -c 'import json,sys,pathlib; d=json.loads(pathlib.Path(sys.argv[1]).read_text()); r=d.get("runtime_probe",{}); packages=r.get("packages",{}); pins=d.get("expected_pins",{}); cfg=d.get("model_config") or {}; ok=(all(packages.get(k)==v for k,v in pins.items()) and r.get("cuda",{}).get("available") and r.get("classes",{}).get("Qwen3_5ForConditionalGeneration") is True and cfg.get("model_type")=="qwen3_5" and bool(cfg.get("vision_config")) and r.get("processor",{}).get("loaded_local_only") and r.get("pip_check",{}).get("returncode")==0); sys.exit(0 if ok else 1)' "$report"; then
   runtime_rc=0
 else

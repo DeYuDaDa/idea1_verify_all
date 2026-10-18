@@ -250,7 +250,7 @@ def parse_structured_output(raw: str, expected_qids: list[str]) -> dict[str, Any
 
 def _package_versions() -> dict[str, str | None]:
     result = {"python": platform.python_version()}
-    for package in ("torch", "transformers", "accelerate", "Pillow"):
+    for package in ("torch", "torchvision", "transformers", "accelerate", "Pillow"):
         try:
             result[package] = importlib.metadata.version(package)
         except importlib.metadata.PackageNotFoundError:

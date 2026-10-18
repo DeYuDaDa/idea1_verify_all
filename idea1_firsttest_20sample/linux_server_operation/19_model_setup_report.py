@@ -7,12 +7,12 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
-PINS = {"torch": "2.10.0+cu128", "transformers": "5.15.0",
+PINS = {"torch": "2.10.0+cu128", "torchvision": "0.25.0+cu128", "transformers": "5.15.0",
         "accelerate": "1.11.0", "Pillow": "11.3.0"}
 
 PROBE = r'''import importlib.metadata as md, json, platform, subprocess, sys
 r={"python":platform.python_version(),"packages":{},"cuda":{"available":False},"classes":{}}
-for n in ("torch","transformers","accelerate","Pillow","sympy","mpmath"):
+for n in ("torch","torchvision","transformers","accelerate","Pillow","sympy","mpmath"):
  try:r["packages"][n]=md.version(n)
  except md.PackageNotFoundError:r["packages"][n]=None
 try:

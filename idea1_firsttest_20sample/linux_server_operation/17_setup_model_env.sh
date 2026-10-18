@@ -69,7 +69,7 @@ ENV_PYTHON="$ENV_PREFIX/bin/python"
 
 # Fixed, stable package set. If any requested package is installed at a different
 # version, stop instead of silently upgrading/replacing it.
-EXPECTED='{"torch":"2.10.0+cu128","transformers":"5.15.0","accelerate":"1.11.0","Pillow":"11.3.0"}'
+EXPECTED='{"torch":"2.10.0+cu128","torchvision":"0.25.0+cu128","transformers":"5.15.0","accelerate":"1.11.0","Pillow":"11.3.0"}'
 set +e
 "$ENV_PYTHON" - "$EXPECTED" <<'PY'
 import importlib.metadata as md, json, sys
@@ -88,7 +88,8 @@ set -e
 (( version_status == 0 )) || die "The environment already contains a conflicting package version. Use a fresh, explicitly reviewed prefix; this script will not upgrade or delete it."
 
 note "Installing only the pinned packages that are not already present."
-"$ENV_PYTHON" -m pip install --cache-dir "$PIP_CACHE" --index-url https://download.pytorch.org/whl/cu128 'torch==2.10.0'
+"$ENV_PYTHON" -m pip install --cache-dir "$PIP_CACHE" --index-url https://download.pytorch.org/whl/cu128 \
+  'torch==2.10.0' 'torchvision==0.25.0'
 "$ENV_PYTHON" -m pip install --cache-dir "$PIP_CACHE" \
   'transformers==5.15.0' 'accelerate==1.11.0' 'Pillow==11.3.0'
 
@@ -136,7 +137,7 @@ try:
     report["nvidia_smi"] = {"query_ok": True, "rows": [line.strip() for line in smi.stdout.splitlines() if line.strip()]}
 except Exception as exc:
     report["nvidia_smi"] = {"query_ok": False, "error": f"{type(exc).__name__}: {exc}"}
-for package in ("torch", "transformers", "accelerate", "Pillow"):
+for package in ("torch", "torchvision", "transformers", "accelerate", "Pillow"):
     try: report["packages"][package] = md.version(package)
     except md.PackageNotFoundError: report["packages"][package] = None
 
