@@ -345,44 +345,66 @@ class ControllerSession:
         *,
         min_distance: float = 0.6,
         max_distance: float = 1.6,
-        camera_height_offset: float = 0.675,
+        camera_height_offset: float | None = None,
+        position: Mapping[str, Any] | None = None,
         force_teleport: bool = False,
     ) -> StepResult:
-        """Choose a reachable point in an XZ distance band and face the object.
+        """Choose a reachable point and geometrically aim at the object's bounds center.
 
-        The camera-height offset is an explicit geometric assumption because
-        object metadata generally exposes the agent body position, not eye pose.
-        Tune it only from measured frames/metadata for the selected agent mode.
+        Prefer the live camera-to-agent offset in event metadata. The explicit
+        fallback is for older/synthetic metadata that omits ``cameraPosition``.
+        ``position`` lets callers recalibrate a native pose without trusting its
+        supplied yaw or horizon.
         """
         if not (0 <= min_distance <= max_distance):
             raise ValueError("require 0 <= min_distance <= max_distance")
-        target = obj.get("position")
+        bounds = obj.get("axisAlignedBoundingBox")
+        target = bounds.get("center") if isinstance(bounds, Mapping) else None
         if not isinstance(target, Mapping) or not all(k in target for k in ("x", "y", "z")):
-            raise ValueError("obj must include a 3D position")
-        positions = self.reachable_positions()
-        candidates = []
-        for point in positions:
-            distance = self._distance_xz(point, target)
-            if min_distance <= distance <= max_distance:
-                candidates.append((distance, float(point["x"]), float(point["z"]), point))
-        if not candidates:
-            raise RuntimeError(
-                f"No reachable position is {min_distance:.2f}-{max_distance:.2f}m from object"
+            target = obj.get("position")
+        if not isinstance(target, Mapping) or not all(k in target for k in ("x", "y", "z")):
+            raise ValueError("obj must include axisAlignedBoundingBox.center or a 3D position")
+
+        if position is None:
+            positions = self.reachable_positions()
+            candidates = []
+            for point in positions:
+                distance = self._distance_xz(point, target)
+                if min_distance <= distance <= max_distance:
+                    candidates.append((distance, float(point["x"]), float(point["z"]), point))
+            if not candidates:
+                raise RuntimeError(
+                    f"No reachable position is {min_distance:.2f}-{max_distance:.2f}m from object"
+                )
+            band_mid = (min_distance + max_distance) / 2.0
+            _, _, _, chosen = min(
+                candidates,
+                key=lambda row: (abs(row[0] - band_mid), row[1], row[2]),
             )
-        # Prefer a mid-band distance; coordinates provide stable tie-breaking.
-        band_mid = (min_distance + max_distance) / 2.0
-        _, _, _, chosen = min(
-            candidates,
-            key=lambda row: (abs(row[0] - band_mid), row[1], row[2]),
-        )
-        agent = self.snapshot().get("agent", {})
-        agent_y = float(chosen["y"]) + camera_height_offset
+        else:
+            if not all(key in position for key in ("x", "y", "z")):
+                raise ValueError("position must include x, y and z")
+            chosen = {key: float(position[key]) for key in ("x", "y", "z")}
+
+        metadata = self.snapshot()
+        agent = metadata.get("agent", {})
+        if camera_height_offset is None:
+            camera_position = metadata.get("cameraPosition")
+            agent_position = agent.get("position", {})
+            if (isinstance(camera_position, Mapping) and isinstance(agent_position, Mapping)
+                    and "y" in camera_position and "y" in agent_position):
+                camera_height_offset = float(camera_position["y"]) - float(agent_position["y"])
+            else:
+                camera_height_offset = 0.675
+        agent_y = float(chosen["y"]) + float(camera_height_offset)
         dx = float(target["x"]) - float(chosen["x"])
         dz = float(target["z"]) - float(chosen["z"])
         yaw = math.degrees(math.atan2(dx, dz)) % 360.0
         horizontal = max(math.hypot(dx, dz), 1e-8)
         raw_horizon = math.degrees(math.atan2(agent_y - float(target["y"]), horizontal))
-        horizon = min(60.0, max(-30.0, round(raw_horizon / 30.0) * 30.0))
+        # TeleportFull accepts continuous camera horizons. Keeping the computed
+        # angle avoids the large floor/ceiling errors caused by 30-degree bins.
+        horizon = min(60.0, max(-30.0, raw_horizon))
         return self.safe_teleport(
             chosen,
             rotation_y=yaw,

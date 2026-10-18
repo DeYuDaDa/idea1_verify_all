@@ -190,7 +190,11 @@ class Interactions:
             raise RuntimeError("place_initial requires an empty agent inventory")
         self._require_capability(object_id, "pickupable")
         self._require_capability(receptacle_id, "receptacle")
-        spawn = self._step("GetSpawnCoordinatesAboveReceptacle", objectId=receptacle_id)
+        # This is a setup oracle query: allow Unity to return valid spawn
+        # coordinates even when the receptacle is not in the current camera
+        # view. Placement and the subsequent metadata relation checks remain
+        # real simulator actions and are still required to succeed.
+        spawn = self._step("GetSpawnCoordinatesAboveReceptacle", objectId=receptacle_id, anywhere=True)
         all_points = spawn.metadata.get("actionReturn") or []
         if not all_points:
             raise RuntimeError(f"No valid spawn coordinates above {receptacle_id!r}")
@@ -278,20 +282,111 @@ class Interactions:
         return [self._step("Pass") for _ in range(steps)]
 
     def look(self, object_id: str) -> StepResult:
-        """Move camera to a native interactable pose; fall back to facing target."""
+        """Aim at the target and require evidence in the rendered observation.
+
+        Native interactable poses are useful position candidates, but their
+        stored yaw/horizon can point away from an object. Recompute both from
+        the live camera offset and target bounds after each bounded candidate.
+        """
         if self.session.inventory():
             return self._noop("look skipped: camera teleport while holding can displace/reset held object")
         obj = self.obj(object_id)
         try:
             poses_result = self._step("GetInteractablePoses", objectId=object_id)
-            poses = poses_result.metadata.get("actionReturn") or []
-            if poses:
-                pose = {key: poses[0][key] for key in ("x", "y", "z", "rotation", "horizon", "standing")
-                        if key in poses[0]}
-                return self._step("TeleportFull", **pose)
+            raw_poses = list(poses_result.metadata.get("actionReturn") or [])
         except (ActionFailure, ValueError, TypeError):
-            pass
-        return self.session.face_object(obj)
+            raw_poses = []
+
+        failures: list[str] = []
+        poses: list[tuple[int, dict[str, float]]] = []
+        seen_positions: set[tuple[float, float, float]] = set()
+        for source_index, native_pose in enumerate(raw_poses):
+            position = native_pose.get("position")
+            if not isinstance(position, dict):
+                position = native_pose
+            if not all(key in position for key in ("x", "y", "z")):
+                continue
+            coordinates = tuple(round(float(position[key]), 3) for key in ("x", "y", "z"))
+            if coordinates in seen_positions:
+                continue
+            seen_positions.add(coordinates)
+            poses.append((source_index, {key: float(position[key]) for key in ("x", "y", "z")}))
+            if len(poses) == 4:
+                break
+        for index, position in poses:
+            try:
+                # Use the native pose only to choose a viewpoint. Recompute
+                # yaw/horizon against the live camera and target AABB center.
+                result = self.session.face_object(obj, position=position)
+                if self._rendered_target_bbox(result, object_id) is not None:
+                    result.record["look_pose_candidate"] = index
+                    if self.session.records:
+                        self.session.records[-1]["look_pose_candidate"] = index
+                    return result
+                failures.append(f"candidate {index}: target absent from rendered detection/mask")
+            except (ActionFailure, RuntimeError, ValueError, TypeError) as exc:
+                failures.append(f"candidate {index}: {type(exc).__name__}: {exc}")
+
+        try:
+            result = self.session.face_object(obj)
+            if self._rendered_target_bbox(result, object_id) is not None:
+                result.record["look_pose_candidate"] = "geometric"
+                if self.session.records:
+                    self.session.records[-1]["look_pose_candidate"] = "geometric"
+                return result
+            failures.append("geometric candidate: target absent from rendered detection/mask")
+        except (ActionFailure, RuntimeError, ValueError, TypeError) as exc:
+            failures.append(f"geometric candidate: {type(exc).__name__}: {exc}")
+        raise RuntimeError(
+            f"Could not establish a rendered view of {object_id!r}; "
+            + "; ".join(failures or ["no usable interactable poses"])
+        )
+
+    @staticmethod
+    def _rendered_target_bbox(result: StepResult, object_id: str) -> dict[str, float] | None:
+        """Return a nontrivial, non-edge bbox backed by rendered event data."""
+        event = result.event
+        detections = getattr(event, "instance_detections2D", None)
+        if not detections:
+            detections = result.metadata.get("instance_detections2D")
+        bbox: dict[str, float] | None = None
+        if isinstance(detections, dict):
+            raw = detections.get(object_id)
+            if isinstance(raw, dict):
+                if all(k in raw for k in ("x", "y", "width", "height")):
+                    bbox = {k: float(raw[k]) for k in ("x", "y", "width", "height")}
+                elif all(k in raw for k in ("x1", "y1", "x2", "y2")):
+                    bbox = {"x": float(raw["x1"]), "y": float(raw["y1"]),
+                            "width": float(raw["x2"])-float(raw["x1"]),
+                            "height": float(raw["y2"])-float(raw["y1"])}
+            elif isinstance(raw, (list, tuple)) and len(raw) == 4:
+                x1, y1, x2, y2 = map(float, raw)
+                bbox = {"x": x1, "y": y1, "width": x2-x1, "height": y2-y1}
+
+        frame = getattr(event, "frame", None)
+        height = int(frame.shape[0]) if frame is not None else 0
+        width = int(frame.shape[1]) if frame is not None else 0
+        if bbox is None:
+            masks = getattr(event, "instance_masks", None)
+            mask = masks.get(object_id) if isinstance(masks, dict) else None
+            if mask is not None and getattr(mask, "ndim", 0) >= 2:
+                rows, cols = mask.nonzero()[:2]
+                if len(cols):
+                    x1, x2 = int(cols.min()), int(cols.max()) + 1
+                    y1, y2 = int(rows.min()), int(rows.max()) + 1
+                    bbox = {"x": float(x1), "y": float(y1),
+                            "width": float(x2-x1), "height": float(y2-y1)}
+                    height, width = int(mask.shape[0]), int(mask.shape[1])
+        if bbox is None or width <= 0 or height <= 0:
+            return None
+        x, y, w, h = bbox["x"], bbox["y"], bbox["width"], bbox["height"]
+        # Reject tiny detections and boxes clipped against the image edge.
+        if w <= 0 or h <= 0 or (w*h)/(width*height) < 0.001:
+            return None
+        margin_x, margin_y = max(2.0, width*0.01), max(2.0, height*0.01)
+        if x < margin_x or y < margin_y or x+w > width-margin_x or y+h > height-margin_y:
+            return None
+        return bbox
 
 
 __all__ = ["Interactions"]

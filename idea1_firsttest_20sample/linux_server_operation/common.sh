@@ -5,7 +5,7 @@ set -Eeuo pipefail
 
 _lso_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd -- "${_lso_script_dir}/.." && pwd -P)}"
-DATA_ROOT="${DATA_ROOT:-/root/will_not_be_push_to_git/idea1_firsttest_20sample}"
+DATA_ROOT="${DATA_ROOT:-/root/autodl-tmp/idea1_firsttest_20sample}"
 CONDA_EXE="${CONDA_EXE:-}"
 CONDA_ENV="${CONDA_ENV:-thor20}"
 THOR_PLATFORM="${THOR_PLATFORM:-CloudRendering}"

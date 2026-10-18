@@ -5,14 +5,16 @@ These scripts are for the Linux machine only. Run them from the repository check
 The matching server paths are:
 
 - Project: `/root/idea1_verify_all/idea1_firsttest_20sample`
-- Data, logs, reports, and archives: `/root/will_not_be_push_to_git/idea1_firsttest_20sample`
-- Export root: `/root/will_not_be_push_to_git/idea1_firsttest_20sample/exports`
+- New data, logs, reports, caches and model environment: `/root/autodl-tmp/idea1_firsttest_20sample`
+- Export root: `/root/autodl-tmp/idea1_firsttest_20sample/exports`
+- Legacy data (preserved): `/root/will_not_be_push_to_git/idea1_firsttest_20sample`
+- Local model: `/root/autodl-tmp/model/qwen3.5-4b`
 
 The scripts accept `PROJECT_DIR`, `DATA_ROOT`, `CONDA_EXE`, `CONDA_ENV`, and `THOR_PLATFORM` overrides. For example:
 
 ```bash
 PROJECT_DIR=/root/idea1_verify_all/idea1_firsttest_20sample \
-DATA_ROOT=/root/will_not_be_push_to_git/idea1_firsttest_20sample \
+DATA_ROOT=/root/autodl-tmp/idea1_firsttest_20sample \
 CONDA_ENV=thor20 THOR_PLATFORM=CloudRendering \
 bash /root/idea1_verify_all/idea1_firsttest_20sample/linux_server_operation/00_preflight.sh
 ```
@@ -36,7 +38,9 @@ Run each file with `bash path/to/stage.sh`; executable-bit changes are not neede
 13. `13_prepare_thor_build.sh` prepares the CloudRendering build separately from simulator startup. See `13_thor_build.md` for bounded, resumable downloading or importing a manually uploaded ZIP. Only after local cache preparation should stage 03 run.
 14. `14_collect_pilot_evidence.sh` packages existing candidate frames/states, original pilot logs and representative failed attempts for diagnosis. It does not start the simulator or approve review forms. Its bundle contains private scoring data for human/code review and must not be used as model input; see `14_pilot_diagnosis.md`.
 
-See `08_after_smoke.md` for the pilot inspection/review/package sequence and the full-generation command.
+Current server continuation: see `18_current_next_steps.md`. Stage 15 copies selected legacy evidence/cache to the new data disk. Stage 16 checks camera framing in three scenes. Stage 17 prepares a separate model environment. Existing candidate generation receipts are not visual approval; do not run full generation until the camera probe is reviewed.
+
+See `08_after_smoke.md` for the pilot inspection/review/package sequence and the full-generation command. Older stage notes retain historical output paths; `common.sh` now defaults to the data disk. Use an explicit `DATA_ROOT` only when intentionally inspecting old output.
 
 For first-run commands, use `00_start_here.md`. Recommended order: preflight, environment setup, reviewed unit checks, graphics readiness and stage 13 build preparation, smoke, pilot, inspect and validate the pilot, then decide whether to run the full generation stage. Validate again before packaging. A pilot is intentionally separate from the full run.
 

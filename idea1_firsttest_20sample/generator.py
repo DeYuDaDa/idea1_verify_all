@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_OUTPUT = Path('/root/will_not_be_push_to_git/idea1_firsttest_20sample/exports')
+DEFAULT_OUTPUT = Path('/root/autodl-tmp/idea1_firsttest_20sample/exports')
 ALL_PAIRS = ('M01','M02','M03','M04','S05','S06','S07','W08','W09','W10',
              'W11','W12','C13','C14','C15','T16','T17','T18','B19','P20')
 CAPABILITY = {'isCooked':'cookable', 'isDirty':'dirtyable',
@@ -101,6 +101,7 @@ class CaseBuilder:
         self.event_result = None
         self.event_index = None
         self.rules: list[str] = []
+        self.excluded_query_fields: set[tuple[str, str]] = set()
 
     @property
     def a(self) -> bool:
@@ -225,10 +226,13 @@ class CaseBuilder:
             # allowed to reposition the carried object, but cannot be silently
             # inserted between the before snapshot and evaluated PutObject.
             held_before={o['objectId'] for o in self.session.inventory()}
-            self.session.face_object(self.obj(look_at),min_distance=1.1,max_distance=1.8,
-                                     force_teleport=True)
+            view_result = self.session.face_object(self.obj(look_at),min_distance=1.1,max_distance=1.8,
+                                                   force_teleport=True)
             self.require('camera_setup_preserved_inventory',
                          held_before=={o['objectId'] for o in self.session.inventory()})
+            self.require('held_setup_target_rendered_in_frame',
+                         self.ops._rendered_target_bbox(view_result, self.roles[look_at]) is not None,
+                         {'target': look_at, 'metadata_visible_is_not_sufficient': True})
         else:
             self.ops.look(self.roles[look_at])
         self.frame('before_event')
@@ -287,7 +291,8 @@ class CaseBuilder:
         for role, oid in self.roles.items():
             if role.startswith(('CounterTop','SinkBasin','BathtubBasin')):
                 continue
-            self.question(role, ['parentReceptacles'])
+            if (role, 'parentReceptacles') not in self.excluded_query_fields:
+                self.question(role, ['parentReceptacles'])
             if self.obj(role).get('toggleable'):
                 self.question(role, ['isToggled'])
         event = self.event_result.record
@@ -316,6 +321,8 @@ class CaseBuilder:
                 # an already water-filled mug is warmed. Metadata alone is not
                 # model-visible thermal evidence.
                 knowability[oid][field]='unknown'
+        for role, field in self.excluded_query_fields:
+            knowability.setdefault(self.roles[role], {})[field] = 'not_assessed'
         extra = {'role_bindings':self.roles, 'evaluated_action':event,
                  'event_action':event['action'], 'direct_fields':self.direct, 'indirect_fields':self.indirect,
                  'selected_pair_fact_keys':self.selected, 'contrast_evidence':self.contrast,
@@ -323,6 +330,8 @@ class CaseBuilder:
                  'observation_audit':{'event_target_visible':event_visible, 'required_frames_present':len(self.frames)>=3,
                                       'visual_preconditions_reviewed':False},
                  'knowability':knowability, 'knowability_protocol':'oracle_history_and_declared_rules_only',
+                 'excluded_query_fields':[{'subject':role, 'predicate':field}
+                                          for role,field in sorted(self.excluded_query_fields)],
                  'visual_only_knowability':'not_assessed', 'seed':self.seed,
                  'position_tolerance_m':self.config['position_tolerance_m'],
                  'construction_status':'simulator_recorded_candidate', 'frame_review_required':True}
@@ -586,13 +595,26 @@ class CaseBuilder:
                     'An apple on the counter beside the plate is not carried merely because it is near it.']
         self.history_frame('apple_plate_support','Plate_1')
         self.freeze('Plate_1')
+        # Camera/setup steps may settle physics. Check the actual frozen
+        # pre-event support rather than relying on an earlier placement.
+        frozen_parents = normalize_parent(get_object(self.before, self.roles['Apple_1']))
+        self.require('apple_support_at_frozen_before',
+                     (self.roles['Plate_1'] in frozen_parents) is self.a,
+                     {'expected_on_plate': self.a, 'actual_parents': frozen_parents})
         self.execute('PickupObject','Plate_1')
         apple_moved=distance(self.actual('Apple_1','position','before'),self.actual('Apple_1','position'))>self.config['position_tolerance_m']
         self.require('apple_carrying_boundary',apple_moved is self.a,{'moved':apple_moved})
         self.indirect[self.roles['Apple_1']]=['position','parentReceptacles','isPickedUp']
         self.question('Plate_1',['position','isPickedUp'])
         self.question('Apple_1',['position'],selected=True)
-        self.check_parent('Apple_1','Plate_1',self.a)
+        # Held-receptacle metadata can omit child parentReceptacles. Retain
+        # the raw field for audit, but neither require it nor turn it into
+        # a physical-support answer. Carrying is tested by actual displacement.
+        self.excluded_query_fields.add(('Apple_1', 'parentReceptacles'))
+        self.checks.append({'name': 'post_pickup_apple_parents_audit_only',
+                            'passed': True,
+                            'detail': {'actual_parents': normalize_parent(self.obj('Apple_1')),
+                                       'used_as_support_gold': False}})
 
 
 def publish_pair(stage: Path, output: Path, pid: str) -> None:

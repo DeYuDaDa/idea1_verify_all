@@ -12,11 +12,11 @@
 | 本实验代码 | `idea1_verify_all/idea1_firsttest_20sample` | `/root/idea1_verify_all/idea1_firsttest_20sample` |
 | Git 外材料与输出 | `主线1/will_not_be_push_to_git` | `/root/will_not_be_push_to_git` |
 
-服务器默认将生成结果写入 Git 外目录中的 `idea1_firsttest_20sample/exports`；环境报告、日志、模拟器试启动图像也在 Git 外目录。当前没有需要用户从 Windows 私有目录手工复制的必需材料。
+从第 15 步起，服务器默认数据根改为数据盘 `/root/autodl-tmp/idea1_firsttest_20sample`，生成结果、日志、环境和缓存都放在此处。现有模型目录为 `/root/autodl-tmp/model/qwen3.5-4b`。旧根 `/root/will_not_be_push_to_git/idea1_firsttest_20sample` 保留，第 15 步只复制必要候选与 Unity 缓存，不删除旧材料。
 
 ## 现在先做什么
 
-新服务器从 [首轮服务器命令](linux_server_operation/00_start_here.md) 开始。当前服务器先按 [第 14 步收集试生成证据](linux_server_operation/14_pilot_diagnosis.md) 打包已有产物，供核查失败原因与候选质量；不重复运行六组或扩展全量。命令、可选参数、后续生成和打包操作全部放在 `linux_server_operation/`。
+新服务器从 [首轮服务器命令](linux_server_operation/00_start_here.md) 开始。当前服务器已返回第 14 步证据，应按 [本轮检查与命令](linux_server_operation/18_current_next_steps.md) 准备数据盘、运行单元检查和三目标取景探针。C13/B19 原图存在严重取景问题，不能作为有效视觉评测数据；M01 尚有初始条件差异。先核查探针，不重复运行六组或扩展全量。命令、可选参数、后续生成和打包操作全部放在 `linux_server_operation/`。
 
 上传的 `2026年10月18日145957.txt` 记录了首轮构造结果，但开始处已截断，缺少 T16 等早期失败的上下文。审核表 `review_form_20261018T070046Z.json` 仅包含六条候选，三个检查项都仍为 false；审核表本身不包含图像或原生前后状态。第 14 步将一次性收集这些原始证据，不更改审核勾选或状态标签。
 
