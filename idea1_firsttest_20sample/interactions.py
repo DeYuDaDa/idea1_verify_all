@@ -7,6 +7,7 @@ reported as a successful helper result.
 from __future__ import annotations
 
 import copy
+from collections import Counter
 import time
 from typing import Any
 
@@ -131,23 +132,80 @@ class Interactions:
             steps.append(self._step("Pass"))
             time.sleep(min(poll_seconds, max(0.0, deadline-time.monotonic())))
 
-    def place_initial(self, object_id: str, receptacle_id: str) -> list[StepResult]:
-        """Place setup object at a native spawn point and verify metadata relation."""
+    @staticmethod
+    def _unique_spawn_points(points: list[dict[str, Any]]) -> list[dict[str, float]]:
+        """Normalize coordinates and remove exact-to-millimeter duplicates."""
+        unique: list[dict[str, float]] = []
+        seen: set[tuple[float, float, float]] = set()
+        for point in points:
+            try:
+                xyz = tuple(float(point[key]) for key in ("x", "y", "z"))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError(f"Malformed spawn coordinate: {point!r}") from exc
+            # The simulator may report identical positions more than once.
+            key = tuple(round(value, 3) for value in xyz)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append({"x": xyz[0], "y": xyz[1], "z": xyz[2]})
+        return unique
+
+    @staticmethod
+    def _spawn_candidates(points: list[dict[str, float]], limit: int) -> list[dict[str, float]]:
+        """Choose a deterministic, spatially spread subset using farthest-point sampling."""
+        if limit < 1:
+            raise ValueError("max_candidates must be positive")
+        unique = list(points)
+        if len(unique) <= limit:
+            return unique
+
+        # Start from the coordinate nearest the centroid, then repeatedly add
+        # the point farthest from the selected set. Original order breaks ties.
+        centroid = tuple(sum(p[axis] for p in unique) / len(unique) for axis in ("x", "y", "z"))
+        first = min(
+            range(len(unique)),
+            key=lambda i: (sum((unique[i][axis] - centroid[n]) ** 2 for n, axis in enumerate(("x", "y", "z"))), i),
+        )
+        selected = [first]
+        min_distance_sq = [
+            sum((point[axis] - unique[first][axis]) ** 2 for axis in ("x", "y", "z"))
+            for point in unique
+        ]
+        min_distance_sq[first] = -1.0
+        while len(selected) < limit:
+            nxt = max(range(len(unique)), key=lambda i: (min_distance_sq[i], -i))
+            selected.append(nxt)
+            center = unique[nxt]
+            for i, point in enumerate(unique):
+                if min_distance_sq[i] < 0:
+                    continue
+                distance_sq = sum((point[axis] - center[axis]) ** 2 for axis in ("x", "y", "z"))
+                min_distance_sq[i] = min(min_distance_sq[i], distance_sq)
+            min_distance_sq[nxt] = -1.0
+        return [unique[i] for i in selected]
+
+    def place_initial(self, object_id: str, receptacle_id: str, *, max_candidates: int = 16) -> list[StepResult]:
+        """Place setup object at a bounded, spatially spread set of native spawn points."""
         if self.session.inventory():
             raise RuntimeError("place_initial requires an empty agent inventory")
         self._require_capability(object_id, "pickupable")
         self._require_capability(receptacle_id, "receptacle")
         spawn = self._step("GetSpawnCoordinatesAboveReceptacle", objectId=receptacle_id)
-        points = spawn.metadata.get("actionReturn") or []
-        if not points:
+        all_points = spawn.metadata.get("actionReturn") or []
+        if not all_points:
             raise RuntimeError(f"No valid spawn coordinates above {receptacle_id!r}")
-        failures: list[str] = []
+        available_points = self._unique_spawn_points(all_points)
+        points = self._spawn_candidates(available_points, max_candidates)
+        failures: Counter[str] = Counter()
+        examples: dict[str, str] = {}
         action_results: list[StepResult] = [spawn]
         for point in points:
             try:
                 placed = self._step("PlaceObjectAtPoint", objectId=object_id, position=point)
             except ActionFailure as exc:
-                failures.append(str(exc))
+                message = " ".join(str(exc).split()) or type(exc).__name__
+                failures[message] += 1
+                examples.setdefault(message, repr(point))
                 continue
             action_results.append(placed)
             action_results.extend(self.settle(steps=2))
@@ -155,8 +213,22 @@ class Interactions:
             children = self.obj(receptacle_id).get("receptacleObjectIds") or []
             if receptacle_id in parent_ids or object_id in children:
                 return action_results
-            failures.append(str(placed.record.get("errorMessage") or "placement relation absent"))
-        raise RuntimeError(f"No spawn coordinate established containment on {receptacle_id!r}: {failures}")
+            message = "placement action succeeded but metadata relation was absent after settling"
+            failures[message] += 1
+            examples.setdefault(message, repr(point))
+        detail = "; ".join(
+            f"{count}x {message[:180]} (example point {examples[message]})"
+            for message, count in failures.most_common(4)
+        ) or "no placement candidates were attempted"
+        omitted = len(failures) - 4
+        if omitted > 0:
+            detail += f"; {omitted} additional distinct error types omitted"
+        budget_exhausted = len(points) < len(available_points)
+        raise RuntimeError(
+            f"Setup placement did not establish a metadata containment relation on {receptacle_id!r}: "
+            f"tested {len(points)} of {len(available_points)} unique available spawn candidates "
+            f"(max_candidates={max_candidates}, budget_exhausted={budget_exhausted}); {detail}"
+        )
 
     def pickup_event(self, object_id: str, *, look_first: bool = True) -> StepResult:
         self._require_capability(object_id, "pickupable")

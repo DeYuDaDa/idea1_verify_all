@@ -12,6 +12,7 @@ import json
 import math
 import shutil
 import sys
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -652,15 +653,18 @@ def main() -> int:
                     print(f'SKIP {pid}: complete candidate with matching code fingerprint',flush=True)
                     continue
                 raise ConstructionError(f'{pid} already exists but is not resumable with this code. Use a fresh DATA_ROOT to preserve earlier evidence.')
-            print(f'BEGIN {pid}',flush=True)
+            pair_started=time.monotonic()
+            print(f'BEGIN {pid} at {datetime.now(timezone.utc).isoformat()}',flush=True)
             accepted=None
             for scene in config['scene_candidates'][family_for(pid)][:args.max_scenes]:
                 for seed in seeds:
+                    attempt_started=time.monotonic()
                     attempt_id=f'{scene}_{seed}_{uuid.uuid4().hex[:8]}'
                     stage=output/'_attempts'/pid/attempt_id
                     stage.mkdir(parents=True)
                     try:
                         for variant in ('A','B'):
+                            print(f'TRY {pid}_{variant}: {scene} seed={seed} at {datetime.now(timezone.utc).isoformat()}',flush=True)
                             if session is None:
                                 session=ControllerSession(scene=scene,platform=args.platform or config['platform'],
                                                           width=config['width'],height=config['height'],
@@ -672,6 +676,20 @@ def main() -> int:
                             builder=CaseBuilder(session,pid,variant,stage,specs[pid],config,seed)
                             try:
                                 builder.build()
+                            except Exception:
+                                # Failed variants do not reach export_case. Preserve
+                                # real snapshots for diagnosis without publishing Gold.
+                                try:
+                                    write_json(stage/f'{pid}_{variant}_failure_context.json',{
+                                        'diagnostic_only':True,'pair_id':pid,'variant':variant,
+                                        'role_bindings':builder.roles,'scenario_checks':builder.checks,
+                                        'before_metadata':builder.before,'after_metadata':builder.after,
+                                        'current_metadata_at_failure':session.snapshot(),
+                                        'evaluated_action':builder.event_result.record if builder.event_result else None,
+                                    })
+                                except Exception as context_error:
+                                    print(f'Failure context could not be saved for {pid}_{variant}: {context_error}',flush=True)
+                                raise
                             finally:
                                 write_json(stage/f'{pid}_{variant}_action_log.json',session.records)
                         a=json.loads((stage/'hidden_gold'/f'{pid}_A.json').read_text())
@@ -690,16 +708,22 @@ def main() -> int:
                         publish_pair(stage,output,pid)
                         accepted={'pair_id':pid,'scene':scene,'seed':seed,'attempt_id':attempt_id,
                                   'source_fingerprint':source_hash,'status':'simulator_checks_passed_pending_review',
-                                  'pair_check':comparison,'timestamp_utc':datetime.now(timezone.utc).isoformat()}
+                                  'pair_check':comparison,'timestamp_utc':datetime.now(timezone.utc).isoformat(),
+                                  'attempt_elapsed_seconds':round(time.monotonic()-attempt_started,3),
+                                  'pair_elapsed_seconds':round(time.monotonic()-pair_started,3)}
                         write_json(receipt,accepted)
-                        print(f'CANDIDATE {pid}: {scene} seed={seed}; visual/minimal-control review still required',flush=True)
+                        print(f'CANDIDATE {pid}: {scene} seed={seed}; pair elapsed {time.monotonic()-pair_started:.1f}s; visual/minimal-control review still required',flush=True)
                         break
                     except KeyboardInterrupt:
                         raise
                     except Exception as exc:
-                        failure={'pair_id':pid,'scene':scene,'seed':seed,'error':str(exc),'traceback':traceback.format_exc()}
+                        failure={'pair_id':pid,'scene':scene,'seed':seed,'error':str(exc),'traceback':traceback.format_exc(),
+                                 'attempt_elapsed_seconds':round(time.monotonic()-attempt_started,3)}
                         write_json(stage/'failure.json',failure)
-                        print(f'FAILED_ATTEMPT {pid} {scene} seed={seed}: {exc}',flush=True)
+                        console_error=str(exc).replace('\n',' ')
+                        if len(console_error)>1200:
+                            console_error=console_error[:1200]+f' ... [full error saved in {stage}/failure.json]'
+                        print(f'FAILED_ATTEMPT {pid} {scene} seed={seed} elapsed={time.monotonic()-attempt_started:.1f}s: {console_error}',flush=True)
                         if session is None:
                             raise ConstructionError('Simulator startup failed. Stop here and inspect smoke/runtime logs before constructing further samples.') from exc
                         if 'has no ' in str(exc) or 'does not report ' in str(exc):
@@ -711,7 +735,8 @@ def main() -> int:
             if accepted:
                 summaries.append(accepted)
             else:
-                summaries.append({'pair_id':pid,'status':'construction_failed','source_fingerprint':source_hash})
+                summaries.append({'pair_id':pid,'status':'construction_failed','source_fingerprint':source_hash,
+                                  'pair_elapsed_seconds':round(time.monotonic()-pair_started,3)})
             write_json(output/'generation_summary.json',{'pairs':summaries,'code_was_run_on':sys.platform,
                        'not_a_model_evaluation':True,'all_candidates_require_visual_and_control_review':True})
     finally:

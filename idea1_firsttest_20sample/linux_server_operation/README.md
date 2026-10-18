@@ -34,6 +34,7 @@ Run each file with `bash path/to/stage.sh`; executable-bit changes are not neede
 11. `11_trace_vulkan_init.sh` follows initialization-time library and device access after stage 10 has ruled out the basic path and gpucomp hypotheses. See `11_vulkan_init_trace.md` for the next command and optional strace installation. It does not install NVIDIA drivers or launch Unity.
 12. `12_fix_egl.sh` addresses the missing `libEGL.so.1` confirmed by stage 11. It requests Ubuntu `libegl1` and required dependencies, verifies actual NVIDIA Vulkan enumeration, and optionally runs the existing smoke probe. See `12_egl_repair.md` for the current server command and evidence paths.
 13. `13_prepare_thor_build.sh` prepares the CloudRendering build separately from simulator startup. See `13_thor_build.md` for bounded, resumable downloading or importing a manually uploaded ZIP. Only after local cache preparation should stage 03 run.
+14. `14_collect_pilot_evidence.sh` packages existing candidate frames/states, original pilot logs and representative failed attempts for diagnosis. It does not start the simulator or approve review forms. Its bundle contains private scoring data for human/code review and must not be used as model input; see `14_pilot_diagnosis.md`.
 
 See `08_after_smoke.md` for the pilot inspection/review/package sequence and the full-generation command.
 

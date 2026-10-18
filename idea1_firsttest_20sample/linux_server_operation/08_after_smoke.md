@@ -1,5 +1,7 @@
 # 首轮试启动成功后
 
+**当前服务器已运行下面的六组命令。** 首轮仅得到 C13、M01、B19 三组候选，T16/S05/P20 失败。当前先执行 [第 14 步收集证据](14_pilot_diagnosis.md)，不要再次运行 04 或直接生成全量；以下保留供新一轮按计划试生成时参考。
+
 2026-10-18 已有实际服务器证据：固定构建包导入成功，第 03 步在 FloorPlan1 返回 `simulator_started`、`rgb_shape: [480, 640, 3]`、`object_count: 77`、`controller_version: 5.0.0`。下一步验证场景构造，无需重复环境修复或下载。
 
 只在 Linux 服务器执行以下命令。先检查 `smoke/report.json` 和 `smoke/scene_rgb.png`，不要只根据 Python 未报错就判定渲染画面正确。
