@@ -1,5 +1,7 @@
 # 首轮试启动成功后
 
+2026-10-18 已有实际服务器证据：固定构建包导入成功，第 03 步在 FloorPlan1 返回 `simulator_started`、`rgb_shape: [480, 640, 3]`、`object_count: 77`、`controller_version: 5.0.0`。下一步验证场景构造，无需重复环境修复或下载。
+
 只在 Linux 服务器执行以下命令。先检查 `smoke/report.json` 和 `smoke/scene_rgb.png`，不要只根据 Python 未报错就判定渲染画面正确。
 
 ## 六组试生成与检查
@@ -11,6 +13,8 @@ bash linux_server_operation/04b_inspect_pilot.sh
 ```
 
 `04` 返回 2 表示至少一组构造失败。已经成功的候选及失败日志都会保留。先把 `generation_summary.json`、有关 `_attempts/.../failure.json` 和当前阶段日志返回，不要靠反复改 Gold 来凑齐结果。
+
+本轮只运行上面两条阶段命令，目标是六组 A/B、12 条场景记录。将以下材料返回后再决定修复或扩展：`exports/generation_summary.json`、第 04 与 04b 阶段日志，以及 `smoke/scene_rgb.png`。如有构造失败，再附对应 `_attempts` 下的失败记录。所有路径均在 `/root/will_not_be_push_to_git/idea1_firsttest_20sample/` 内；日志在 `logs/`。`pending_review` 表示候选尚未人工核验，不能当作已验收数据。
 
 ## 审阅候选
 

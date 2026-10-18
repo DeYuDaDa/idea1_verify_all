@@ -1,6 +1,6 @@
 # 首轮 20 组事实影响范围诊断
 
-本目录是实验代码，不是已经生成的数据集。设计为 20 组 A/B 配对、40 条场景记录。2026-10-18 最新服务器日志确认：依赖安装和 18 项单元测试通过，EGL 已补齐，Vulkan 成功枚举 NVIDIA RTX 4090。当前阻塞是约 797 MiB 的 CloudRendering 构建包下载中断；Unity 尚未启动，未生成数据。Windows 端不运行 Python、测试、模拟器或安装环境。
+本目录是实验代码，不是已经生成的数据集。设计为 20 组 A/B 配对、40 条场景记录。2026-10-18 最新服务器日志确认：依赖安装和 18 项单元测试通过，EGL/Vulkan 正常，手动上传的构建包已通过大小、SHA-256 与解压 CRC 检查并安装。第 03 步真实启动 CloudRendering 的 FloorPlan1，返回 480×640 RGB、77 个物品。环境与试启动已通过；画面仍需审阅，样本构造尚未验证。Windows 端不运行 Python、测试、模拟器或安装环境。
 
 ## 路径约定
 
@@ -14,9 +14,9 @@
 
 ## 现在先做什么
 
-同步代码后，按 [首轮服务器命令](linux_server_operation/00_start_here.md) 执行前四步。命令、可选参数、后续生成和打包操作全部放在 `linux_server_operation/`。本 README 不要求在 Windows 执行任何项目命令。
+新服务器从 [首轮服务器命令](linux_server_operation/00_start_here.md) 开始。当前服务器已完成环境与试启动，按 [六组试生成与检查](linux_server_operation/08_after_smoke.md) 继续。命令、可选参数、后续生成和打包操作全部放在 `linux_server_operation/`。本 README 不要求在 Windows 执行任何项目命令。
 
-第 12 步的系统修复已成功，长时间消耗在随后启动的构建包下载，异常为 `IncompleteRead` / `ChunkedEncodingError`。已有该结果的服务器改按 [第 13 步构建包准备](linux_server_operation/13_thor_build.md) 操作，支持限时续传或手动上传完整 ZIP；校验并安装缓存后，再单独试启动。不重装环境或图形库。
+上传的 `2026年10月18日133018.txt` 已记录第 13 步导入成功和第 03 步 `simulator_started`。当前不需要重跑环境安装、图形库修复或构建包导入；下一步仅试生成 C13、T16、M01、S05、B19、P20 六组 A/B，目标为 12 条场景记录，实际成功数以生成证据为准。
 
 首轮顺序是环境检查、独立 Conda 环境、单元测试、模拟器试启动。成功后再运行六组试生成；不要先启动全部 40 条。任何一步失败都先保留该阶段日志，不需要继续执行后续阶段。
 
