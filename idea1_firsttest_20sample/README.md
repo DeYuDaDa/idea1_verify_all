@@ -16,7 +16,7 @@
 
 同步代码后，按 [首轮服务器命令](linux_server_operation/00_start_here.md) 执行前四步。命令、可选参数、后续生成和打包操作全部放在 `linux_server_operation/`。本 README 不要求在 Windows 执行任何项目命令。
 
-已有第 10 步最新结果的服务器直接按 [NVIDIA 初始化跟踪](linux_server_operation/11_vulkan_init_trace.md) 操作。第 10 步已确认入口实际加载 580.105.08、同版本 gpucomp 存在且已加载；常规依赖、环境覆盖和 ICD 路径测试未解释初始化失败。复用现有 Conda 环境，不重跑 01、02、09、10。
+第 11 步已找到明确缺失：NVIDIA 初始化时动态加载 `libEGL.so.1`，各系统路径均返回 ENOENT。已有该结果的服务器直接按 [第 12 步 EGL 修复](linux_server_operation/12_egl_repair.md) 操作，安装提供该文件的 `libegl1` 及必需依赖，确认 NVIDIA 枚举成功后再试启动。复用现有 Conda 环境，不重跑前面的安装、测试与诊断。
 
 首轮顺序是环境检查、独立 Conda 环境、单元测试、模拟器试启动。成功后再运行六组试生成；不要先启动全部 40 条。任何一步失败都先保留该阶段日志，不需要继续执行后续阶段。
 
