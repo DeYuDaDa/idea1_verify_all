@@ -1,0 +1,191 @@
+{
+  "plan_version": "conditional-hard-groups-v1",
+  "purpose": "仅描述机制探测 A-E 通过后才可构造的候选困难组。不是已生成数据、已通过的 gate、模拟器 Gold 或 frontier 难度结论。Gold 必须由目标 build/asset 上实际事件前后状态与审计证据产生。",
+  "status": "conditional_unverified",
+  "current_probe_refs": {
+    "interpretation": "下列是真实探针 case ID，可定位本轮 result.json；不是自动放行条件。还须匹配每组 prerequisite_conditions 的实例、作用区域、时序与控制。",
+    "A_microwave_history_binding": {
+      "case_ids": ["f1_microwave_enter_then_activate", "f1_microwave_activate_then_enter", "f2_microwave_inside", "f2_microwave_outside", "f2_microwave_position_scan", "f3_microwave_single", "f3_microwave_multiple", "f4_uncooked_then_heated_and_cooled", "f4_cooked_then_reheated_and_cooled"],
+      "remaining_conditions": ["two-object observations do not establish three-Potato availability/capacity", "bind each instance to its matched single-object control", "microwave-specific matched time/no-event control remains separate from stove F9"]
+    },
+    "B_running_water_attribute_crossing": {
+      "case_ids": ["f2_sink_position_scan", "f3_water_single", "f3_water_multiple", "f5_dirty_empty_water_on", "f5_dirty_empty_water_off_control", "f5_dirty_water_filled_water_on", "f5_dirty_water_filled_water_off_control", "f5_clean_empty_water_on", "f5_clean_empty_water_off_control", "f5_clean_water_filled_water_on", "f5_clean_water_filled_water_off_control"],
+      "remaining_conditions": ["multi-object simultaneous cleaning/filling requires matched per-instance single controls", "two bowls do not establish three-bowl inventory or contact", "event timing and actual water contact must match the intended last-event template"]
+    },
+    "C_coffee_history_liquid_gate": {
+      "case_ids": ["f1_coffee_enter_then_activate", "f1_coffee_activate_then_enter", "f6_initially_empty", "f6_initially_water_filled", "f6_fill_then_empty", "f6_empty_then_fill"],
+      "remaining_conditions": ["preserve empirical liquid and temperature outcomes rather than assume the water-filled case", "source-off and coffee-specific matched-time calibration remain needed for causal attribution", "match history nuisance actions/time separately"]
+    },
+    "D_pickup_motion_vs_support": {
+      "case_ids": ["F7_removed", "F7_returned", "F7_retained", "F10_nested_carry"],
+      "remaining_conditions": ["single child probes do not establish three-child carrying independence", "support-relation Gold requires an independent criterion beyond missing parent metadata", "no-pickup matched background-motion control is separate from removed-child control"]
+    },
+    "E_stove_control_position_binding": {
+      "case_ids": ["f3_stove_single_kettle", "f3_stove_single_pot", "f3_stove_multiple", "F8_control_A", "F8_control_B", "F8_control_A_swapped", "F8_control_B_swapped", "F9_matched_time"],
+      "remaining_conditions": ["match burner/knob IDs, exact contact positions and object types across trials", "fixed physics stepping does not by itself verify the ObjectTemperature clock", "single/multi-source arrangements must match the final planned event"]
+    },
+    "X_F10_nested_optional_extension": {
+      "case_ids": ["F7_removed", "F7_returned", "F7_retained", "F10_nested_carry", "F10_nested_heat", "F10_nested_wash"],
+      "remaining_conditions": ["direct exposure and outside controls must be matched separately for each mechanism and asset", "a positive carrying result does not establish recursive heating or washing"]
+    },
+    "X_F11_alternative_support_optional_extension": {
+      "case_ids": ["F11_redundant_support", "F9_matched_time"],
+      "remaining_conditions": ["a midpoint candidate search is not an exhaustive search for all independent supports", "all reset-isolated source arms and delayed-decay controls must be supported at the same actual candidate position", "attribute_clock_unverified remains an explicit boundary"]
+    }
+  },
+  "global_contract": {
+    "input_output_invariants": [
+      "同一组的配对变体保持对象实例数、问题数、问题顺序、别名、答案模式和输出 schema 一致；只交换指定的一个条件或其对象绑定。",
+      "问题逐对象逐属性询问当前值或 change_status；位置、温度、熟度、清洁、液体/填充、容器关系各自独立成题，不把多属性合并成一个含糊题。",
+      "保留 not_applicable 与 unknown；能力不存在不是 false，证据不充分不是机制未发生。",
+      "模型输入和隐藏评分 metadata 分离；metadata 仅用于门控、Gold 派生和审计，不进入模型输入。协议模式必须显式标注 direct_visual、visual_history_and_rules 或 oracle_history_and_rules。",
+      "场景库存、实例数量、对象类型不是机制成立证据，也不作为难度维度。不得假定可生成/克隆多个 Potato。类型变化须控制 object-type 混淆。"
+    ],
+    "complexity_dimensions": [
+      {"id":"C1_effective_condition_composition","independent_control":"固定对象、历史长度、查询与事件，只交换一个真实影响结果的条件值；条件无实验内变化时不计为有效条件。"},
+      {"id":"C2_historical_condition_revision","independent_control":"相同最终前置状态和事件，配对改变是否需要从历史撤销/恢复操作恢复当前条件；提供末态直接可读控制。"},
+      {"id":"C3_object_condition_binding","independent_control":"固定条件多重集、对象数、属性和查询数，只交换条件对应的对象；先通过同类型对象校准，缺库存时 blocked，不克隆或替换。"},
+      {"id":"C4_fact_rule_selectivity","independent_control":"固定对象和事件，针对同一对象分别查询适用与不适用机制的属性；逐属性核验，不用整体对象标签代替。"},
+      {"id":"C5_near_boundary_discrimination","independent_control":"更新与保持候选只差一个已验证的必要条件；另保留明显负例作为低难对照。"}
+    ],
+    "evidence_policy": "所有 prerequisite_conditions 均须在同一模拟器 build、场景 asset、具体对象实例、目标位置/接触区、事件时间点及多对象配置上通过；不能用全局 Fxx pass、相邻场景、另一物体或文档说法自动放行。门控工具只报告可行性，不补造对象、事件或 Gold。"
+  },
+  "groups": [
+    {
+      "group_id": "A_microwave_history_binding",
+      "required_facts": ["F1", "F2", "F3", "F4", "F9"],
+      "prerequisite_conditions": [
+        {"fact":"F1", "same_build_asset":"M01 Potato_1/Microwave_1: setup at immediately-before-event, successful ToggleObjectOn; verify lastActionSuccess, off-to-on, temperature/isCooked before-after; T17 toaster activation is a different device and cannot substitute for microwave order."},
+        {"fact":"F2", "same_build_asset":"M01 external Potato_1 negative and M04 Cup_1 removed-before-activation; establish actual containment at freeze time and compare per-object temperature deltas, not parent metadata alone."},
+        {"fact":"F3", "same_build_asset":"M01/M03 only demonstrate co-presence of Potato_1 plus Bowl_1, not three Potato instances. Require three separately identified, same-type cookable Potato instances in one scene and repeat per-instance before/after heat/cooked checks; if inventory has fewer, blocked with one-Potato A/B fallback."},
+        {"fact":"F4", "same_build_asset":"M02 checks actual Potato_1 isCooked and temperature pre/post, with B already cooked before activation; also require independent removal/cooling probe showing temperature may change while isCooked persists. Existing M02 does not establish a high-difficulty over-propagation error."},
+        {"fact":"F9", "same_build_asset":"M02 and M04 settle at fixed recorded intervals and compare temperature, cooked state, containment, and location; add matched-duration inactive/no-event control to attribute changes. No fixed-timing conclusion from another asset."}
+      ],
+      "variants": [
+        {"variant_id":"A1", "historical_operations":["For three separately existing Potato instances P1/P2/P3, record initial containment, isCooked and temperature.", "P1: PutObject out of Microwave, then PutObject back in; immediately before activation it is inside, uncooked, RoomTemp.", "P2: leave inside; activate once and allow verified cooking; deactivate, remove to matched counter, cool to recorded state; place back inside before final activation. Do not state that cooling uncooks it.", "P3: put inside, then remove to matched counter before final activation; leave uncooked and RoomTemp."], "last_event":"ToggleObjectOn(Microwave_1), success required; closed-state and final positions recorded at freeze immediately before event."},
+        {"variant_id":"A2", "historical_operations":["Keep the same three object instances, operation count, target event, and query list as A1.", "Swap only P1 and P3 final containment/history binding: P1 is outside at final activation; P3 is inside after removal and return. Keep their cooked/temperature states matched or use a predeclared factorial subpair; do not silently vary both factors."], "last_event":"Same successful ToggleObjectOn(Microwave_1) at matched event time."}
+      ],
+      "queries": ["For each P1/P2/P3: current parent/container relation (derived from visible evidence and public rule), temperature", "For each P1/P2/P3: current isCooked", "Microwave_1: current isToggled and isOpen as event checks"],
+      "controls": ["Minimal pair A1/A2 swaps only which uncooked Potato is inside at activation; same three instances, history length via matched sham operation if possible, exact event, 7 potato queries plus 2 device queries, answer modes and order.", "Single-Potato fallback: use M01-like inside/outside paired episodes with same one Potato and fixed 2-3 queries; label C3 object-binding dimension unavailable and do not call it the multi-object hard group.", "M02 already-cooked repeat-heating is a fact-retention control only. Score final isCooked value separately from whether a model labels it newly changed; final true is correct even when the mechanism applies again.", "A1/A2 with final conditions printed directly is the low-history control for C2; omit one earlier operation only in a separate, matched ablation."],
+      "complexity": {"C1":"Containment and cooked-state conditions independently gated; vary one at a time.", "C2":"Recover current containment after remove/return and current cooked state after heating/cooling history.", "C3":"Bind three same-type Potato instances; inventory is a feasibility gate, never a proxy for difficulty.", "C4":"Temperature can change while cooked remains true; score separately.", "C5":"Inside/uncooked versus inside/already-cooked differs by cooked precondition; inside versus just-removed differs by current relation."},
+      "evidence_requirements": ["Exact scene/build/asset and object IDs; prove at least three native Potato instances exist before designing the case; no spawn/clone/type substitution.", "Every setup operation and final event action result, frozen before metadata, post metadata, timestamps/step counts, per-object temperature and cooked field applicability.", "Per-query frame/history/rule evidence; object identity and final containment readable; event success and matched negative control.", "Gold derived per fact from actual before/after metadata and verified public mechanism; if values do not differ as conditionally expected, revise or block; no author-authored expected outcome promoted to Gold."],
+      "blocked_fallback": "If F1/F2/F4/F9 fail, block microwave mechanism group. If only three-object inventory/F3 fails, report blocked for multi-object binding and retain only a clearly labeled single-object paired diagnostic. No object cloning, extra Potato fabrication, or Gold inference.",
+      "status":"conditional_unverified"
+    },
+    {
+      "group_id": "B_running_water_attribute_crossing",
+      "required_facts": ["F2", "F3", "F5", "F9"],
+      "prerequisite_conditions": [
+        {"fact":"F2", "same_build_asset":"W08 requires actual stream-contact effect; its running_water_contact_has_native_effect_or_valid_negative check is a starting check. A SinkBasin parent relation alone is insufficient; establish exact contact region and placement."},
+        {"fact":"F3", "same_build_asset":"W08-W10 each currently use one Bowl_1 per variant and do not prove simultaneous multi-Bowl independence. Require three existing, independently identified Bowl instances, all with separately verified contact and metadata outcomes in the same scene/time window."},
+        {"fact":"F5", "same_build_asset":"W08 dirty/empty, W09 clean/empty, W10 dirty/water-filled: require checks for isDirty, isFilledWithLiquid, fillLiquid, canFillWithLiquid before/after, and the exact actual water contact. Do not force unsupported fill flags."},
+        {"fact":"F9", "same_build_asset":"W08-W10 record successful PutObject and before/after metadata; additionally match elapsed settling steps, source toggle, and a faucet-off control to distinguish water effect from time/physics."}
+      ],
+      "variants": [
+        {"variant_id":"B1", "historical_operations":["Select three actual Bowl instances; establish each Bowl's canFillWithLiquid and initial isDirty/fill/liquid state.", "Before opening faucet: Bowl A dirty+empty; Bowl B dirty+water-filled; Bowl C clean+empty. Use only supported setup operations and log each separately.", "Move all three to individually verified stream-contact positions; expose faucet-on history and frame."], "last_event":"Turn Faucet_1 on while bowls are already at verified contact positions (or, if only placement triggers effects, define the event as one fixed successful PutObject per bowl in a fixed order and treat order as a confound to test)."},
+        {"variant_id":"B2", "historical_operations":["Same bowls, same setup action count, final geometry, faucet condition and timing.", "Swap only B and C's fill/clean conditions in the declared single-factor pair; retain a separate subpair for the clean condition so no pair changes two factors."], "last_event":"Same Faucet_1 activation / matched placement protocol."}
+      ],
+      "queries": ["For each Bowl A/B/C: current isDirty", "For each Bowl A/B/C: canFillWithLiquid applicability, isFilledWithLiquid, fillLiquid (not_applicable if capability absent)", "For each Bowl A/B/C: current parent/container relation and world position if placement is part of event"],
+      "controls": ["Keep 3 objects and 9-12 applicable property questions, output schema, order, and event steps fixed across paired variants.", "Minimal condition swaps: dirty+empty vs dirty+filled for cleaning/filling selectivity; clean+empty vs dirty+empty for cleaning precondition; one variable changes per pair.", "Use existing W08, W09, W10 separately as initial mechanism probes; W11 Plate is a nonfillable negative boundary only after native nonfillable_negative_control passes; it cannot stand in for a Bowl.", "Single-Bowl fallback is a 2-variant factorial of W08/W09/W10 conditions, explicitly not multi-object competition."],
+      "complexity": {"C1":"Faucet state, actual stream contact, dirty state and empty/fill state are independent candidate conditions; retain only demonstrated effective conditions.", "C2":"Prior fill/empty and clean/dirty operations must be reconstructed at event time.", "C3":"Bind each state vector to a specific Bowl; all instances must be naturally present and individually calibrated.", "C4":"Cleaning and filling are separate properties; pre-existing true values are retained, not newly flipped.", "C5":"Same contact differs only in cleanliness or fill condition in separate strict pairs."},
+      "evidence_requirements": ["Asset/build and all three Bowl IDs; capability fields and state setup records.", "Visible/recorded water source state, actual contact evidence and successful actions for each object; no inference from basin membership.", "Per-object before/after cleanliness, filled, liquid identity and applicability; fixed wait/step count and Faucet off/no-event time control.", "Keep water source and contact evidence in public evidence plan; hidden metadata only for Gold derivation."],
+      "blocked_fallback":"If stream contact or either mechanism is unknown, block that property/group. If only multi-Bowl co-effects fail, fall back to single-Bowl minimal pairs and do not claim F3 or object-binding complexity.",
+      "status":"conditional_unverified"
+    },
+    {
+      "group_id":"C_coffee_history_liquid_gate",
+      "required_facts":["F1","F6","F9"],
+      "prerequisite_conditions":[
+        {"fact":"F1","same_build_asset":"C13/C14 require exact successful Mug PutObject into CoffeeMachine at event time; C13 checks active/off source contrast, C14 checks empty vs water precondition. Verify source toggled before placement."},
+        {"fact":"F6","same_build_asset":"C13/C14 checks actual fill, fillLiquid and temperature separately. Require explicit empty->water and water->empty setup history with states re-read at freeze; current generator only establishes empty vs water variants directly and does not test historical change/reversal."},
+        {"fact":"F9","same_build_asset":"C13/C14 record before/after liquid/fill/temp and successful placement; hold wait interval constant and include active-but-empty and inactive controls to separate filling from heating/timing."}
+      ],
+      "variants":[
+        {"variant_id":"C1","historical_operations":["One existing Mug starts empty; history: fill it with water, then empty it using verified operation; freeze confirms empty.","CoffeeMachine is on before event; Mug starts outside it."],"last_event":"PutObject(Mug_1, CoffeeMachine_1), success required."},
+        {"variant_id":"C2","historical_operations":["Same Mug, machine, actions count and final geometry. History ends with Mug containing water after a prior empty state; freeze confirms water and isFilledWithLiquid=true.","CoffeeMachine on before event."],"last_event":"Same successful PutObject(Mug_1, CoffeeMachine_1)."}
+      ],
+      "queries":["Mug_1: isFilledWithLiquid applicability and current value","Mug_1: fillLiquid identity","Mug_1: temperature","Mug_1: parent/container relation","CoffeeMachine_1: isToggled"],
+      "controls":["Strict minimal pair changes only event-time liquid state (empty vs water); same one Mug, 5 questions, order, output schema, coffee machine and placement.","C13 active/off contrast tests source state, C14 empty/water contrast tests precondition, C15 inside/nearby destination is a separate non-strict relation boundary; do not combine these into one strict pair.","Add a matched active-machine empty Mug positive control and inactive-machine empty Mug negative control; don't assume water turns into coffee or becomes Hot.","If history operations cannot realize both final states with matched nuisance factors, report setup unfillable and keep C14 as the direct-state diagnostic only."],
+      "complexity":{"C1":"Active source and empty-container condition are separate necessary candidates.","C2":"Recover liquid after fill/empty history; direct-state version is a baseline.","C3":"Single object; no object-binding claim.","C4":"Fill status, liquid identity, temperature and location are distinct facts.","C5":"Empty vs water-filled at identical active machine and destination differs by one verified precondition."},
+      "evidence_requirements":["Exact Mug/Machine IDs, capability fields and every fill/empty operation; verify liquid identity at freeze and post-event.","Successful PutObject and source state at event time; constant settling interval.","Actual before/after filled/liquid/temp/parent values; applicability separated; public evidence can establish history, machine state, rule and event.","Derive expected labels from observed values plus established mechanism; if water-filled result is simulator-dependent/unchanged, do not prescribe conversion."],
+      "blocked_fallback":"If empty/water state cannot be matched or C13 positive mechanism fails, block history-gated group. Keep observed C14 outcomes without asserting coffee conversion; no inferred Gold.",
+      "status":"conditional_unverified"
+    },
+    {
+      "group_id":"D_pickup_motion_vs_support",
+      "required_facts":["F3","F7","F9"],
+      "prerequisite_conditions":[
+        {"fact":"F3","same_build_asset":"P20 currently tests one Apple supported by Plate vs a nearby Apple. The proposed multi-object version requires three existing, distinct movable child objects in one scene; calibrate each independently for support, displacement and stable non-support positions."},
+        {"fact":"F7","same_build_asset":"P20 exact checks apple_support_at_frozen_before and apple_carrying_boundary plus before/after positions establish motion propagation. post_pickup_apple_parents_audit_only explicitly has used_as_support_gold=false. Do not use missing native parentReceptacles after pickup as evidence of lost support or as support-relation Gold; independently audit physical support/relative geometry and visual frames."},
+        {"fact":"F9","same_build_asset":"P20 records PickupObject success and position deltas; require matched settling and stationary no-pickup control, plus pre-event support evidence immediately at freeze."}
+      ],
+      "variants":[
+        {"variant_id":"D1","historical_operations":["Set three existing objects X/Y/Z on a stable Plate or beside it; for X, remove then restore support; for Y, remove and leave on nearby counter; Z remains on Plate.","At frozen pre-event time verify support independently with exact geometry and frame; verify actual metadata parents if available but do not treat absence as negative Gold."],"last_event":"PickupObject(Plate_1), success required."},
+        {"variant_id":"D2","historical_operations":["Same three instances, setup action count, positions and queries. Swap only the final support membership of X and Y; recheck at freeze."],"last_event":"Same successful PickupObject(Plate_1)."}
+      ],
+      "queries":["Plate_1: world position change_status and isPickedUp","For each X/Y/Z: world position change_status from before to after","For each X/Y/Z: support/relative-to-Plate relation only if independent evidence protocol can establish it; otherwise omit as Gold and retain as audit-only"],
+      "controls":["Same 4-7 objects only if naturally present, same per-object question count, order, format, event, camera plan and wait time.","Minimal pair swaps exactly one child's pre-event support relation while holding the other child positions fixed; include nearby non-support negative and supported positive per P20.","World-position displacement is the primary movement outcome. Evaluate support relation independently from motion; movement alone does not prove current support after pickup.","Single Apple fallback mirrors P20; report motion boundary only, with support metadata field excluded from scored output if it is not natively reliable."],
+      "complexity":{"C1":"Current support membership gates carried motion only if calibrated.","C2":"Restore/remove histories determine current support at pickup time.","C3":"Bind support membership to child identity with naturally available distinct objects.","C4":"World position change and support relation are separate facts; don't infer one from the other.","C5":"Supported vs near-but-unsupported child differs by one relation, with both independently observed."},
+      "evidence_requirements":["Asset/build/object IDs; PickupObject success; position vectors before and after with tolerance and matched settling.","Pre-event support evidence from independent, calibrated physical/visual criterion at freeze; metadata parent relation is corroboration only if validated.","Explicit check for each object's pre/post parent fields and exclusion status; missing child parent after pickup stays unknown/audit-only, never false support Gold.","Question-level history/frame references for support and event. Human physical intuition alone is insufficient."],
+      "blocked_fallback":"If pickup does not move supported child or moves nearby negative, block carrying mechanism. If support cannot be independently observed, score only position movement and remove support-relation query. If three assets unavailable, use P20 single-Apple pair and make no multi-object claim.",
+      "status":"conditional_unverified"
+    },
+    {
+      "group_id":"E_stove_control_position_binding",
+      "required_facts":["F2","F3","F8","F9"],
+      "prerequisite_conditions":[
+        {"fact":"F2","same_build_asset":"S05/S06/S07 must establish native controlledObjects mapping and actual burner activation; S06 checks contact/support vs nearby position. A parentReceptacles relation alone must not stand in for heating contact."},
+        {"fact":"F3","same_build_asset":"S05-S07 use a single Kettle_1. Proposed multi-object version needs at least two existing cookable objects (prefer same type), calibrated independently on active/inactive burners simultaneously; if only one or mixed types, block multi-object binding or design type-balanced controls."},
+        {"fact":"F8","same_build_asset":"S05 generator check names two_distinct_native_stove_control_mappings and two_independent_control_targets; S07 expectedchecks verify operated knob/mapped burner. Require same asset mapping evidence and a reciprocal knob/burner swap replay; labels A/B are aliases, not assumed physical semantics."},
+        {"fact":"F9","same_build_asset":"S05/S06/S07 compare burner state and Kettle temperature before/after; add same-duration no-toggle and inactive burner controls; hold settling steps and object placement constant."}
+      ],
+      "variants":[
+        {"variant_id":"E1","historical_operations":["Read and publish Knob->Burner mapping from native metadata/history; place two existing calibrated objects K1/K2 on distinct burners.","History: swap K1/K2 positions, then restore only the declared final arrangement so the current object-to-burner relation must be reconstructed; verify exact final support/contact before event."],"last_event":"ToggleObjectOn(Knob_A), success required; target burner inferred from established mapping, not alias suffix."},
+        {"variant_id":"E2","historical_operations":["Keep controls, operation count, object types and query set fixed; swap only K1/K2 final burner positions relative to E1.","Reverify contact and mapping at freeze."],"last_event":"Same successful ToggleObjectOn(Knob_A)."}
+      ],
+      "queries":["Knob_A: isToggled","Burner_A and Burner_B: isToggled","For each object K1/K2: position, support/contact relation as independently calibrated, temperature","No assumed pan/pot heating property unless the field is applicable and observed"],
+      "controls":["Keep object count, object type mix, 7-9 queries, order, output format, event target and settling interval fixed.","Strict minimal pair swaps only object-to-burner assignment; retain same control mapping and only one active knob.","S05 placement on/off active burner and S06 nearby non-contact establish contact boundary; S07 changes event-target identity and is explicitly non-strict, so it cannot serve as the swap minimal pair.","If same-type two-object inventory is unavailable, use one-object S05/S06/S07 diagnostics and report C3 unavailable. If mixed types are unavoidable, run each object type in both burner conditions to control type."],
+      "complexity":{"C1":"Mapped control target and object contact independently gate heat.","C2":"Recover final burner position after historical swap; direct-current-position baseline required.","C3":"Bind each object to its final burner with natural inventory; type is controlled.","C4":"Knob, burner toggle, position/contact, temperature are queried separately.","C5":"Object on active burner vs adjacent/inactive burner differs by one mapping or contact condition in separate pairs."},
+      "evidence_requirements":["Exact scene/build, native controlledObjects IDs and reciprocal replay; show mapping in allowed public history/rule evidence.","For each object, before-event and after-event position/contact plus temperature; successful knob event and burner states.","Same-duration no-toggle control and consistent settling; object type capability/applicability records.","No answer key from A/B alias or suffix; conditional expected state is assigned only after actual calibration."],
+      "blocked_fallback":"If mapping differs, is ambiguous, or activation does not change native burner metadata, block. If contact or heating is unknown, do not make temperature Gold. If insufficient compatible instances, retain single-object controls only; no fabricated second object.",
+      "status":"conditional_unverified"
+    },
+    {
+      "group_id":"X_F10_nested_optional_extension",
+      "required_facts":["F7","F10"],
+      "prerequisite_conditions":[{"fact":"F7","same_build_asset":"P20 apple_carrying_boundary and frozen support check must pass independently for each nested level; parent metadata omission remains non-Gold."},{"fact":"F10","same_build_asset":"No existing M01-M04/S05-S07/W08-W12/C13-C15/T16-T18/B19/P20 check verifies heat/cleaning recursively affects nested contents. Require new direct-vs-nested action probes per mechanism on exact asset/build."}],
+      "variants":[{"variant_id":"X10A","historical_operations":["Only after mechanism probe: establish outer receptacle R containing inner receptacle I containing object O; independently verify each edge before event."],"last_event":"Mechanism-specific event (must be explicitly selected after probe, e.g. activate heat source or pick up R); no generic recursive assumption."},{"variant_id":"X10B","historical_operations":["Matched nesting depth and instances, with O moved one level out of the tested mechanism boundary; exact edge difference documented."],"last_event":"Same event as X10A."}],
+      "queries":["Each relevant parent/position edge separately","O's directly relevant property only if mechanism applicability is calibrated","Outer and inner object states as independent checks"],
+      "controls":["Direct exposure positive control, one-level nested candidate, and outside negative; same objects/questions/event duration.","Run carrying, heating and cleaning as separate probes. Passing one does not license another."],
+      "complexity":{"C1":"Nested relation edge only if it causally changes mechanism outcome.","C2":"Historical nesting edits only as separately manipulated factor.","C3":"Bind each edge to object identity.","C4":"Motion/containment and heat/cleanliness remain independent facts.","C5":"One edge difference between nested and direct exposure."},
+      "evidence_requirements":["New named checks for each edge and each direct/nested outcome, exact build and raw before/after metadata.","No recursion Gold from documented/expected physics or another mechanism's result."],
+      "blocked_fallback":"Keep F10 extension excluded if direct/nested mechanism outcome is unknown, non-repeatable or not independently observable. No recursive labels.",
+      "status":"conditional_unverified"
+    },
+    {
+      "group_id":"X_F11_alternative_support_optional_extension",
+      "required_facts":["F11"],
+      "prerequisite_conditions":[{"fact":"F11","same_build_asset":"No current pair validates two independent causal supports for the same attribute. Require source A and source B separately, combined support, remove-A and remove-B states, and matched time controls in the same asset/build."}],
+      "variants":[{"variant_id":"X11A","historical_operations":["Establish support sources A+B for target property, then remove source A while verifying B remains active."],"last_event":"Remove/disable source A; action and post-state must be directly observed."},{"variant_id":"X11B","historical_operations":["Matched target with only source A and source B removed or disabled; same source-action count and event timing."],"last_event":"Same source-removal event with precisely declared single-factor contrast."}],
+      "queries":["Target property current value","Source A current state","Source B current state","Relevant relation/contact for each source"],
+      "controls":["Each source alone, A+B, remove-A, remove-B, and equal-duration no-removal control; do not infer redundancy from delayed decay.","Keep target instance and query schema fixed."],
+      "complexity":{"C1":"Number and state of independent sufficient supports, only after separate causal validation.","C2":"Recover source changes over history.","C3":"Bind source-to-target relations.","C4":"Source state and target value are separate facts.","C5":"One remaining source versus none is the key paired boundary."},
+      "evidence_requirements":["Four-way actual metadata/visual trace, source-specific interventions and time controls; named checks for each causal path.","Do not claim redundancy when only persistence/slow decay is observed."],
+      "blocked_fallback":"Optional only. If source independence or immediate effect is unknown, omit the extension entirely; do not create a synthetic support rule or Gold.",
+      "status":"conditional_unverified"
+    }
+  ],
+  "mechanism_gate_mapping": {
+    "F1": ["M01 expectedchecks: lastActionSuccess and Microwave.isToggled off-to-on; M04: Cup containment immediately before activation; T17 is different toaster mechanism; W08/C13: successful water/coffee placement after source state setup. These validate separate action-order cases, not universal trigger order."],
+    "F2": ["M01: external Potato negative; M04: removed Cup before activation; S06: actual support/contact vs nearby counter; W08: running_water_contact_has_native_effect_or_valid_negative and check_parent is relation-only; C15: inside vs nearby machine; T17: inside vs exterior BreadSliced."],
+    "F3": ["M01/M03: only Potato_1 plus Bowl_1 co-presence, not three same-type potatoes; W08-W10/C13-C15/P20/S05-S07 each use one target instance. No listed existing named check establishes three-object same-mechanism independence; a new exact-build inventory and per-object co-effect check is mandatory."],
+    "F4": ["M02: actual pre/post isCooked and temperature; ensure B truly cooked and remains cooked; microwave() sets B cooked before event and heat() records observed results. Does not test cooling retention after a later heat event; add explicitly named cooling-retention probe. Correct final isCooked=true is retention even if heated again."],
+    "F5": ["W08 expectedchecks: cleanliness/liquid/fill and canFillWithLiquid; W09: already clean, empty; W10: dirty, water-filled. water() named checks include running_water_contact_has_native_effect_or_valid_negative, nonfillable_negative_control (Plate/W11), and actual before/after expects. Separate values; no unsupported fill=False."],
+    "F6": ["C13: before/after fill/liquid/temp and machine toggle, active/off contrast; C14: empty vs water-filled, don't force conversion; coffee() checks active, empty, fillLiquid and preserves as observed. No existing check tests matched historical empty-water-empty transitions."],
+    "F7": ["P20: apple_support_at_frozen_before and apple_carrying_boundary compare support-at-event with actual displacement; post_pickup_apple_parents_audit_only explicitly used_as_support_gold=false. M04 checks actual Cup containment at activation and temperature/location; these do not make absent post-pickup parent metadata a support Gold."],
+    "F8": ["S05/S07: generator.require names two_distinct_native_stove_control_mappings and two_independent_control_targets; expectedchecks verify operated knob and mapped burner. Need replay in same asset/build; pair aliases alone are not proof."],
+    "F9": ["M02, M04: temperature/state before-after and recorded settling; S05/S06: actual kettle temperature and burner state; W08-W10: after placement state; C13/C14: liquid/fill/temp; T16-T18: cooked state and timing. Existing probes require added matched elapsed-time/no-event controls before event causality is claimed."],
+    "F10": ["No existing pair's named checks establish nested-content heating, cleaning, or recursive carrying. P20 validates only a direct Plate-Apple carry boundary; new mechanism-specific direct/nested probes required."],
+    "F11": ["No existing pair or named check establishes independent alternative supports for one target property. Optional extension remains blocked pending source-by-source intervention and matched time controls."]
+  }
+}

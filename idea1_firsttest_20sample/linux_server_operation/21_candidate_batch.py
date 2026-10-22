@@ -57,7 +57,7 @@ def prepare(args):
         config["scene_candidates"][family] = preferred + [scene for scene in original if scene not in preferred]
     run = args.output / "_run"
     write(run / "config.json", config)
-    names = ("generator.py", "runtime.py", "interactions.py", "exporter.py", "validate.py", "specs.json")
+    names = ("generator.py", "frame_evidence.py", "event_bindings.py", "runtime.py", "interactions.py", "exporter.py", "validate.py", "evidence_workflow.py", "review.py", "specs.json")
     hashes = {}
     for name in names:
         source = args.project / name

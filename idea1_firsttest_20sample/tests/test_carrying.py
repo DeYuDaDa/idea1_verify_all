@@ -113,6 +113,12 @@ def make_builder(variant, *, move_apple=True, lose_support_on_freeze=False):
     builder.seed = 17
     builder.roles = {}
     builder.frames = []
+    builder.frame_observations = []
+    # These fixtures test native carrying, not image capture. Capture diagnostics
+    # have separate tests; do not write pretend RGB files to a shared /tmp path.
+    def record_frame(stage):
+        builder.frames.append({"stage": stage, "path": f"data/media/P20_{variant}_{stage}_rgb.png"})
+    builder.frame = record_frame
     builder.checks = []
     builder.history = []
     builder.direct = {}

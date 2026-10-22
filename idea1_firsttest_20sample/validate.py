@@ -301,9 +301,8 @@ def _pair_result(pair: Mapping[str, Any], a: Mapping[str, Any] | None, b: Mappin
         if pair_id == "S07":
             target_ok = bool(kwargs_a.get("objectId") and kwargs_b.get("objectId")) and kwargs_a.get("objectId") != kwargs_b.get("objectId")
         elif pair_id == "C15":
-            target_ok = (bool(kwargs_a.get("objectId")) and kwargs_a.get("objectId") == kwargs_b.get("objectId")
-                         and bool(kwargs_a.get("receptacleObjectId")) and bool(kwargs_b.get("receptacleObjectId"))
-                         and kwargs_a.get("receptacleObjectId") != kwargs_b.get("receptacleObjectId"))
+            from event_bindings import destination_contrast
+            target_ok = destination_contrast(a, b, event_a, event_b)
         else:
             target_ok = bool(targets_event_a and targets_event_b) and targets_event_a == targets_event_b
         event_kind_status = "pass" if kind_ok and target_ok else "fail"
@@ -403,6 +402,20 @@ def _pair_result(pair: Mapping[str, Any], a: Mapping[str, Any] | None, b: Mappin
     }
 
 
+def _reviewed_fact_readiness(record: dict, reviewed_fact_ids: set[str]) -> dict:
+    """Resolve readiness in a working copy, never rewrite native Gold values."""
+    result = dict(record)
+    facts = []
+    for original in record.get("actual_facts_diff", []):
+        fact = dict(original)
+        if fact.get("fact_id") in reviewed_fact_ids and fact.get("knowability") == "not_assessed":
+            fact["knowability"] = "knowable"
+            fact["knowability_review_basis"] = "hash_bound_per_question_evidence_review"
+        facts.append(fact)
+    result["actual_facts_diff"] = facts
+    return result
+
+
 def validate(root: str | Path, pair_ids: list[str] | None = None) -> dict[str, Any]:
     """Return a JSON-serializable dataset validation report for ``root``."""
     root_path = Path(root)
@@ -436,6 +449,19 @@ def validate(root: str | Path, pair_ids: list[str] | None = None) -> dict[str, A
         except (OSError, json.JSONDecodeError):
             sample_errors.append({"sample_id": "", "error": "invalid_review_records_json"})
     valid_review_samples = _matching_review_samples(root_path, review_record)
+    evidence_status, evidence_errors, reviewed_facts = "missing", [], {}
+    evidence_path = root_path / "evidence_review.json"
+    if evidence_path.is_file():
+        try:
+            from evidence_workflow import check_review
+            evidence_result = check_review(root_path, evidence_path)
+            evidence_status = evidence_result["status"]
+            evidence_errors = evidence_result.get("errors", [])
+            if evidence_status == "approved":
+                for sample in _read_json(evidence_path)["samples"]:
+                    reviewed_facts[sample["sample_id"]] = {q["fact_id"] for q in sample["questions"]}
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            evidence_status, evidence_errors = "blocked", [str(exc)]
     scan_ids = available_ids & expected_ids if pair_ids else available_ids
     for sample_id in sorted(scan_ids):
         try:
@@ -457,7 +483,7 @@ def validate(root: str | Path, pair_ids: list[str] | None = None) -> dict[str, A
         public_leaks.extend(f"{sample_id}:invalid_or_hidden_path:{path}" for path in path_issues)
         if isinstance(model_input, Mapping) and not model_input.get("frames"):
             sample_errors.append({"sample_id": sample_id, "error": "public_media_frames_missing"})
-        records[sample_id] = hidden
+        records[sample_id] = _reviewed_fact_readiness(hidden, reviewed_facts.get(sample_id, set()))
         if isinstance(public, Mapping):
             records[sample_id]["_public_model_input"] = public.get("model_input")
         if sample_id in valid_review_samples:
@@ -477,7 +503,7 @@ def validate(root: str | Path, pair_ids: list[str] | None = None) -> dict[str, A
     elif inconclusive_pairs:
         overall = "inconclusive"
     else:
-        reviewed = all(f"{p['pair_id']}_A" in valid_review_samples and f"{p['pair_id']}_B" in valid_review_samples for p in pairs)
+        reviewed = evidence_status == "approved" and all(f"{p['pair_id']}_A" in valid_review_samples and f"{p['pair_id']}_B" in valid_review_samples for p in pairs)
         knowable = all(
             all(f.get("knowability") == "knowable" for f in records.get(f"{p['pair_id']}_{v}", {}).get("actual_facts_diff", []) if f.get("fact_id") in _selected_fact_keys(records.get(f"{p['pair_id']}_{v}", {})))
             for p in pairs for v in ("A", "B")
@@ -493,7 +519,9 @@ def validate(root: str | Path, pair_ids: list[str] | None = None) -> dict[str, A
         "validation_level": "simulator_validated" if overall in {"pass", "pending_review"} else "pending_or_failed",
         "benchmark_ready": overall == "pass",
         "review_record_status": review_record_status,
-        "not_ready_reasons": (["matching_human_review_record_missing_or_stale"] if overall == "pending_review" and review_record_status != "valid" else []) + (["selected_target_not_knowable"] if overall == "pending_review" and not all(all(f.get("knowability") == "knowable" for f in records.get(f"{p['pair_id']}_{v}", {}).get("actual_facts_diff", []) if f.get("fact_id") in _selected_fact_keys(records.get(f"{p['pair_id']}_{v}", {}))) for p in pairs for v in ("A", "B")) else []),
+        "question_evidence_review_status": evidence_status,
+        "question_evidence_review_errors": evidence_errors,
+        "not_ready_reasons": (["per_question_evidence_review_missing_or_blocked"] if evidence_status != "approved" else []) + (["matching_human_review_record_missing_or_stale"] if overall == "pending_review" and review_record_status != "valid" else []) + (["selected_target_not_knowable"] if overall == "pending_review" and not all(all(f.get("knowability") == "knowable" for f in records.get(f"{p['pair_id']}_{v}", {}).get("actual_facts_diff", []) if f.get("fact_id") in _selected_fact_keys(records.get(f"{p['pair_id']}_{v}", {}))) for p in pairs for v in ("A", "B")) else []),
         "expected_sample_count": len(expected_ids),
         "available_public_sample_count": len(input_files),
         "available_hidden_sample_count": len(hidden_files),

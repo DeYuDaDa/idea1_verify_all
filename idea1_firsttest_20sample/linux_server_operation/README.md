@@ -1,5 +1,9 @@
 # Linux server operation
 
+Current task (2026-10-22): skip stage 30 and follow [31_机制探测与困难组.md](31_机制探测与困难组.md). Stage 31 runs private native mechanism probes in the existing simulator environment; it does not load a model or generate approved hard-group data. The conditional designs are in `../hard_group_plan.json` and `../困难组设计与机制依赖.md`.
+
+Earlier evidence-quality workflow: [30_工作流核验与下一步.md](30_工作流核验与下一步.md). Stages 28/29 prepare and check per-question evidence review; they do not generate scenes or repair camera views. These are not prerequisites for stage 31. Formal model inference retains its existing review checks.
+
 These scripts are for the Linux machine only. Run them from the repository checkout or another working directory; each script locates the project from its own location. Do not run these stages on the Windows authoring machine.
 
 The matching server paths are:

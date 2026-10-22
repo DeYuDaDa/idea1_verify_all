@@ -1,0 +1,97 @@
+{
+  "plan_version": 1,
+  "status": "manual_review_required",
+  "automatic_enforcement": false,
+  "purpose": "Pre-capture scene evidence planning. This template contains no fixed gold answers and must not be exposed as model input.",
+  "scope": {
+    "complex_question_groups": "Do not extend until the basic mechanism controls and evidence graph have passed manual audit.",
+    "sequence": [
+      "simple_mechanism_controls",
+      "source_evidence_graph_audit",
+      "complex_group_extension"
+    ],
+    "basic_control_types": [
+      "positive_transition",
+      "blocked_precondition",
+      "unrelated_fact_preservation"
+    ]
+  },
+  "protocol_boundary": {
+    "current_oracle_protocol": "Keep the current oracle protocol explicitly oracle-based. RGB review does not change the provenance of oracle state or convert it into visual history.",
+    "future_visual_protocol": "Design and review a new generator protocol before producing any dataset that claims visual-history evidence.",
+    "question_modes": [
+      "direct_visual",
+      "visual_history_and_rules",
+      "oracle_history_and_rules"
+    ],
+    "mode_assignment": "unassigned",
+    "automatic_fallback": false
+  },
+  "camera_capture_requirements": {
+    "per_role_per_predicate_per_phase": true,
+    "required_views": [
+      "calibration_view",
+      "front",
+      "inside_or_contents_when_relevant",
+      "before_event",
+      "after_event"
+    ],
+    "camera_agent_carried_objects": "Plan captures separately from objects carried by the camera agent; record visibility constraints and do not assume carried objects are scene evidence.",
+    "joint_visibility_negative_controls": "When needed, capture devices and their contents jointly visible as a negative control.",
+    "bbox_threshold": {
+      "enabled_as_configurable_sanity_check": true,
+      "threshold": null,
+      "meaning": "A bounding-box threshold is only a configurable visibility sanity check. It is not semantic proof that a predicate is visually discriminable."
+    },
+    "duplicate_rgb": "Exact duplicate frames are informational and are not automatically a bug; check intended phase, viewpoint and evidence role."
+  },
+  "asset_calibration": {
+    "required_fields": [
+      "asset_id",
+      "build_or_asset_version",
+      "viewpoint",
+      "prefact_observability",
+      "post_event_observability",
+      "test_method",
+      "result",
+      "reviewer_note"
+    ],
+    "unknowns_are_explicit": true
+  },
+  "inference_rules": {
+    "premise_requirement": "Infer an unobserved outcome FROM permitted visual/public history, event evidence and declared rules. Hidden simulator metadata is for validation only and must never be used as a model-visible premise.",
+    "do_not_infer_from_all_final_fields": true,
+    "allow_inferred_unobserved_outcome": true
+  },
+  "groups": [],
+  "group_entry_template": {
+    "pair_id": "",
+    "status": "planned_not_approved",
+    "old_facts_and_allowed_sources": [],
+    "event_and_participants": {},
+    "direct_changes": [],
+    "indirect_changes_and_derivation": [],
+    "facts_to_preserve_and_reason": [],
+    "single_intended_AB_difference": "",
+    "nuisance_differences_to_check": [],
+    "questions": [
+      {
+        "subject_alias": "",
+        "predicate": "",
+        "mode": "unassigned",
+        "required_premises_and_sources": [],
+        "required_views_by_phase": [],
+        "asset_calibration_reference": "",
+        "evidence_failure_action": "reject_or_replan_before_model_run"
+      }
+    ],
+    "camera_actions_and_physics_side_effects": [],
+    "native_preconditions_recheck_after_camera_actions": true,
+    "review_decision": "pending"
+  },
+  "review": {
+    "reviewer": "",
+    "decision": "pending",
+    "notes": "Complete the per-role, per-predicate and per-phase capture plan and review its evidence graph before generation."
+  }
+}

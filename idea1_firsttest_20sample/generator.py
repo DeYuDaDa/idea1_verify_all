@@ -42,7 +42,7 @@ def write_json(path: Path, data: Any) -> None:
 
 def fingerprint(config_path: Path | None = None, platform: str | None = None) -> str:
     digest = hashlib.sha256()
-    for name in ('generator.py','interactions.py','runtime.py','exporter.py','validate.py','specs.json','config.json'):
+    for name in ('generator.py','frame_evidence.py','event_bindings.py','interactions.py','runtime.py','exporter.py','validate.py','evidence_workflow.py','review.py','specs.json','config.json'):
         path = HERE / name
         digest.update(name.encode())
         digest.update(path.read_bytes())
@@ -89,6 +89,7 @@ class CaseBuilder:
         self.spec, self.config, self.seed = spec, config, seed
         self.roles: dict[str,str] = {}
         self.frames: list[dict] = []
+        self.frame_observations: list[dict] = []
         self.checks: list[dict] = []
         self.history: list[dict] = []
         self.direct: dict[str,list[str]] = {}
@@ -162,6 +163,7 @@ class CaseBuilder:
 
     def frame(self, stage: str) -> None:
         from runtime import StepResult
+        from frame_evidence import describe_frame
         event = self.session.controller.last_event
         result = StepResult(event, self.session.snapshot(), {})
         media = self.stage / 'data' / 'media'
@@ -169,6 +171,15 @@ class CaseBuilder:
                     stem=f'{self.pair_id}_{self.variant}_{len(self.frames):02d}_{stage}',
                     include_instance=False)
         self.frames.append({'stage':stage,'path':Path(paths['rgb']).relative_to(self.stage).as_posix()})
+        self.frame_observations.append(describe_frame(
+            event, result.metadata, self.roles, stage=stage,
+            relative_path=self.frames[-1]['path'],
+            png_sha256=hashlib.sha256(Path(paths['rgb']).read_bytes()).hexdigest(),
+            capture_action_index=len(self.session.records)-1,
+        ))
+        write_json(self.stage/'private_logs'/f'{self.pair_id}_{self.variant}_frames.json',
+                   {'observations':self.frame_observations,
+                    'state_readability_approved':False})
 
     def history_frame(self, stage: str, look_at: str) -> None:
         self.ops.look(self.roles[look_at])
@@ -313,9 +324,9 @@ class CaseBuilder:
         knowability = {}
         for question in self.questions:
             field, oid = question['predicate'], self.roles[question['subject']]
-            # Explicit oracle history + declared, construction-checked rules
-            # support these query slots; visual-only validity remains unaudited.
-            knowability.setdefault(oid, {})[field] = 'knowable' if field in {'temperature','isCooked','isDirty','isFilledWithLiquid','fillLiquid','isToggled','isBroken','isOpen','isPickedUp','parentReceptacles','position'} else 'not_assessed'
+            # A supported field name is not proof that the supplied evidence
+            # determines its answer. Per-question review resolves readiness.
+            knowability.setdefault(oid, {})[field] = 'not_assessed'
             if self.pair_id=='C14' and not self.a and question['subject']=='Mug_1' and field=='temperature':
                 # The declared coffee-filling rule does not determine whether
                 # an already water-filled mug is warmed. Metadata alone is not
@@ -333,6 +344,8 @@ class CaseBuilder:
                  'excluded_query_fields':[{'subject':role, 'predicate':field}
                                           for role,field in sorted(self.excluded_query_fields)],
                  'visual_only_knowability':'not_assessed', 'seed':self.seed,
+                 'question_evidence_review_required':True,
+                 'frame_observation_audit_path':f'private_logs/{self.pair_id}_{self.variant}_frames.json',
                  'position_tolerance_m':self.config['position_tolerance_m'],
                  'construction_status':'simulator_recorded_candidate', 'frame_review_required':True}
         record = export_case(self.stage, self.pair_id, self.variant, model_input,

@@ -86,6 +86,11 @@ note "Forwarding inference arguments exactly as provided. Choose --limit 1 for t
 
 unset QWEN_EXTERNAL_STRICT_VALIDATION
 if [[ "$review_mode" == "approved" ]]; then
+  note "Checking the hash-bound per-question evidence review before formal inference."
+  [[ -f "$export_root/evidence_review.json" ]] || die "Missing per-question evidence review. Use stages 28/29; legacy three-checkbox review alone is insufficient."
+  "$CONDA_EXE" run --no-capture-output --name "$THOR20_ENV" \
+    python "$PROJECT_DIR/evidence_workflow.py" check \
+    --export-root "$export_root" --form "$export_root/evidence_review.json"
   note "Running strict export/review validation in the separate $THOR20_ENV Conda environment before model inference."
   "$CONDA_EXE" run --no-capture-output --name "$THOR20_ENV" \
     python "$PROJECT_DIR/validate.py" "$export_root" --strict
