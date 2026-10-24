@@ -21,7 +21,7 @@ MANIFEST_DIRS = (
     Path("/etc/vulkan/icd.d"),
     Path("/usr/share/vulkan/icd.d"),
     Path("/usr/local/share/vulkan/icd.d"),
-    Path("/root/.local/share/vulkan/icd.d"),
+    Path(os.environ.get("SERVER_HOME") or Path.home()) / ".local/share/vulkan/icd.d",
 )
 SELECTED_ENV_KEYS = (
     "VK_ICD_FILENAMES", "VK_DRIVER_FILES", "VK_ADD_DRIVER_FILES",

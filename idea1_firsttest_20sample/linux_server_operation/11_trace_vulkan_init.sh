@@ -56,13 +56,13 @@ task_run_probe() {
     trace_args=("$(command -v strace)" -f -tt -s 256 -e trace=openat,open,access,stat,newfstatat,statx,readlink,readlinkat,ioctl -o "${task_evidence}/${label}.strace" --)
   fi
   set +e
-  timeout 35s "$CONDA_EXE" run --no-capture-output -n "$CONDA_ENV" "${trace_args[@]}" env LD_DEBUG=libs,files "$@" >"${label}.stdout.txt" 2>"${label}.loader_stderr.txt"
+  timeout 35s "$CONDA_EXE" run --no-capture-output "${_lso_conda_selector[@]}" "${trace_args[@]}" env LD_DEBUG=libs,files "$@" >"${label}.stdout.txt" 2>"${label}.loader_stderr.txt"
   status=$?
   set -e
   if [[ "$task_strace_available" == true ]] && grep -Eiq 'ptrace|operation not permitted|could not attach' "${label}.loader_stderr.txt"; then
     printf '%s\n' 'strace could not trace this container; retrying once with LD_DEBUG only.' >> "${label}.loader_stderr.txt"
     set +e
-    timeout 35s "$CONDA_EXE" run --no-capture-output -n "$CONDA_ENV" env LD_DEBUG=libs,files "$@" >"${label}.fallback.stdout.txt" 2>"${label}.fallback.loader_stderr.txt"
+    timeout 35s "$CONDA_EXE" run --no-capture-output "${_lso_conda_selector[@]}" env LD_DEBUG=libs,files "$@" >"${label}.fallback.stdout.txt" 2>"${label}.fallback.loader_stderr.txt"
     status=$?
     set -e
   fi

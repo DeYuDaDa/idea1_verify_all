@@ -18,8 +18,20 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-DEFAULT_MODEL = Path("/root/autodl-tmp/model/qwen3.5-4b")
-DEFAULT_OUTPUTS = Path("/root/autodl-tmp/idea1_firsttest_20sample/model_outputs")
+_SERVER_HOME = Path(os.environ.get("SERVER_HOME") or Path.home())
+_SERVER_PROFILE = os.environ.get("THOR_SERVER_PROFILE", "auto")
+_AUTODL_ROOT = _SERVER_HOME / "autodl-tmp"
+_DATA_ROOT_DEFAULT = Path(os.environ.get("DATA_ROOT") or (
+    _AUTODL_ROOT / "idea1_firsttest_20sample"
+    if _SERVER_PROFILE == "autodl" or (_SERVER_PROFILE == "auto" and _AUTODL_ROOT.is_dir() and os.access(_AUTODL_ROOT, os.W_OK))
+    else _SERVER_HOME / "experiment_data" / "idea1_firsttest_20sample"
+))
+DEFAULT_MODEL = Path(os.environ.get("QWEN_MODEL_DIR") or (
+    _AUTODL_ROOT / "model" / "qwen3.5-4b"
+    if _SERVER_PROFILE == "autodl" or (_SERVER_PROFILE == "auto" and _AUTODL_ROOT.is_dir() and os.access(_AUTODL_ROOT, os.W_OK))
+    else _SERVER_HOME / "model" / "qwen3.5-4b"
+))
+DEFAULT_OUTPUTS = _DATA_ROOT_DEFAULT / "model_outputs"
 
 
 class RunnerError(RuntimeError):

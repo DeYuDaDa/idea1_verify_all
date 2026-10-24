@@ -85,7 +85,15 @@ def main(argv=None) -> int:
     parser.add_argument("--sample-steps", default="0,1,4,12,36")
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--platform", choices=("Linux64", "CloudRendering"), default="CloudRendering")
-    parser.add_argument("--build-cache-dir", type=Path, default=Path(os.environ.get("DATA_ROOT", "/root/autodl-tmp/idea1_firsttest_20sample")) / "unity_cache")
+    server_home = Path(os.environ.get("SERVER_HOME") or Path.home())
+    server_profile = os.environ.get("THOR_SERVER_PROFILE", "auto")
+    autodl_root = server_home / "autodl-tmp"
+    data_root_default = Path(os.environ.get("DATA_ROOT") or (
+        autodl_root / "idea1_firsttest_20sample"
+        if server_profile == "autodl" or (server_profile == "auto" and autodl_root.is_dir() and os.access(autodl_root, os.W_OK))
+        else server_home / "experiment_data" / "idea1_firsttest_20sample"
+    ))
+    parser.add_argument("--build-cache-dir", type=Path, default=data_root_default / "unity_cache")
     parser.add_argument("--local-executable-path", type=Path)
     args = parser.parse_args(argv)
     all_cases = registry()

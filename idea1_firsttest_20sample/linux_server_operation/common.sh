@@ -5,10 +5,12 @@ set -Eeuo pipefail
 
 _lso_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd -- "${_lso_script_dir}/.." && pwd -P)}"
-DATA_ROOT="${DATA_ROOT:-/root/autodl-tmp/idea1_firsttest_20sample}"
-CONDA_EXE="${CONDA_EXE:-}"
-CONDA_ENV="${CONDA_ENV:-thor20}"
-THOR_PLATFORM="${THOR_PLATFORM:-CloudRendering}"
+source "${_lso_script_dir}/server_paths.sh"
+if [[ -n "$THOR_ENV_PREFIX" ]]; then
+  _lso_conda_selector=(--prefix "$THOR_ENV_PREFIX")
+else
+  _lso_conda_selector=(-n "$CONDA_ENV")
+fi
 LOG_DIR="${DATA_ROOT%/}/logs"
 
 # Refuse accidentally placing non-Git outputs anywhere inside this repository.
@@ -42,17 +44,16 @@ resolve_conda() {
   if [[ -n "$CONDA_EXE" ]]; then
     [[ -x "$CONDA_EXE" ]] || die "CONDA_EXE is set but is not executable: $CONDA_EXE"
   else
-    CONDA_EXE="$(command -v conda || true)"
-    if [[ -z "$CONDA_EXE" ]]; then
-      for candidate in /root/miniconda3/bin/conda /root/anaconda3/bin/conda /opt/conda/bin/conda; do
-        if [[ -x "$candidate" ]]; then CONDA_EXE="$candidate"; break; fi
-      done
-    fi
+    source "${_lso_script_dir}/server_paths.sh"
     [[ -n "$CONDA_EXE" ]] || die "Conda was not found. Install/configure Conda on the Linux server, then set CONDA_EXE=/absolute/path/to/conda. No installer or large package download was started."
   fi
 }
 
 env_exists() {
+  if [[ -n "$THOR_ENV_PREFIX" ]]; then
+    [[ -x "${THOR_ENV_PREFIX%/}/bin/python" ]]
+    return
+  fi
   local base_python
   base_python="$("$CONDA_EXE" info --base)/bin/python"
   [[ -x "$base_python" ]] || base_python="$("$CONDA_EXE" info --base)/bin/python3"
@@ -60,11 +61,26 @@ env_exists() {
   "$CONDA_EXE" env list --json | "$base_python" -c 'import json,os,sys; name=sys.argv[1]; paths=json.load(sys.stdin).get("envs", []); sys.exit(0 if any(os.path.basename(os.path.normpath(p)) == name for p in paths) else 1)' "$CONDA_ENV"
 }
 
+_thor_conda_run() {
+  "$CONDA_EXE" run --no-capture-output "${_lso_conda_selector[@]}" "$@"
+}
+
 run_python() {
-  "$CONDA_EXE" run --no-capture-output -n "$CONDA_ENV" python "$@"
+  local graphics_env="${DATA_ROOT%/}/thor_graphics.env" user_library_dir=""
+  if [[ "${THOR_DISABLE_GRAPHICS_ENV:-0}" != 1 && -f "$graphics_env" ]]; then
+    # Stage 33 writes a single shell-safe THOR_USER_LIBRARY_DIR assignment.
+    unset THOR_USER_LIBRARY_DIR
+    source "$graphics_env"
+    user_library_dir="${THOR_USER_LIBRARY_DIR:-}"
+  fi
+  if [[ -n "$user_library_dir" ]]; then
+    _thor_conda_run env "LD_LIBRARY_PATH=${user_library_dir}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}" python "$@"
+  else
+    _thor_conda_run python "$@"
+  fi
 }
 
 print_settings() {
   printf 'Stage: %s\nProject: %s\nData root: %s\nConda env: %s\nTHOR platform: %s\nLog: %s\n' \
-    "$_lso_stage" "$PROJECT_DIR" "$DATA_ROOT" "$CONDA_ENV" "$THOR_PLATFORM" "$_lso_log"
+    "$_lso_stage" "$PROJECT_DIR" "$DATA_ROOT" "${THOR_ENV_PREFIX:-$CONDA_ENV}" "$THOR_PLATFORM" "$_lso_log"
 }

@@ -18,6 +18,15 @@ CASES = [
     ("FloorPlan201", "Laptop"),
     ("FloorPlan9", "Microwave"),
 ]
+
+_SERVER_HOME = Path(os.environ.get("SERVER_HOME") or Path.home())
+_SERVER_PROFILE = os.environ.get("THOR_SERVER_PROFILE", "auto")
+_AUTODL_ROOT = _SERVER_HOME / "autodl-tmp"
+_DATA_ROOT_DEFAULT = Path(os.environ.get("DATA_ROOT") or (
+    _AUTODL_ROOT / "idea1_firsttest_20sample"
+    if _SERVER_PROFILE == "autodl" or (_SERVER_PROFILE == "auto" and _AUTODL_ROOT.is_dir() and os.access(_AUTODL_ROOT, os.W_OK))
+    else _SERVER_HOME / "experiment_data" / "idea1_firsttest_20sample"
+))
 BUILD = "thor-CloudRendering-f0825767cd50d69f666c7f282e54abfe58f1e917"
 
 
@@ -61,10 +70,10 @@ def require_success(result: Any, label: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out", type=Path,
-                        default=Path(os.environ.get("DATA_ROOT", "/root/autodl-tmp/idea1_firsttest_20sample"))
+                        default=_DATA_ROOT_DEFAULT
                         / "camera_probe")
     parser.add_argument("--build-cache-dir", type=Path,
-                        default=Path(os.environ.get("DATA_ROOT", "/root/autodl-tmp/idea1_firsttest_20sample"))
+                        default=_DATA_ROOT_DEFAULT
                         / "unity_cache")
     parser.add_argument("--local-executable-path", type=Path, default=None)
     parser.add_argument("--platform", choices=("Linux64", "CloudRendering"),

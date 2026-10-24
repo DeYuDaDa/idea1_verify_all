@@ -2,11 +2,18 @@
 # Run the offline Qwen inference script inside the isolated step-17 environment.
 set -Eeuo pipefail
 
-DATA_ROOT="${DATA_ROOT:-/root/autodl-tmp/idea1_firsttest_20sample}"
-MODEL_DIR="${QWEN_MODEL_DIR:-/root/autodl-tmp/model/qwen3.5-4b}"
-ENV_PREFIX="${QWEN_ENV_PREFIX:-${DATA_ROOT%/}/model_env}"
-THOR20_ENV="${THOR20_ENV:-thor20}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/server_paths.sh"
+DATA_ROOT="${DATA_ROOT}"
+MODEL_DIR="${QWEN_MODEL_DIR}"
+ENV_PREFIX="${QWEN_ENV_PREFIX}"
 CONDA_EXE="${CONDA_EXE:-}"
+THOR20_ENV="${THOR20_ENV:-$CONDA_ENV}"
+if [[ -n "$THOR_ENV_PREFIX" ]]; then
+  thor_validation_selector=(--prefix "$THOR_ENV_PREFIX")
+else
+  thor_validation_selector=(--name "$THOR20_ENV")
+fi
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd -- "$PROJECT_DIR/.." && pwd -P)"
@@ -22,14 +29,6 @@ esac
 [[ -d "$ENV_PREFIX" && -x "$ENV_PREFIX/bin/python" ]] || die "Step-17 environment is unavailable/incomplete: $ENV_PREFIX. Finish and review step 17 first."
 [[ -d "$MODEL_DIR" && -f "$MODEL_DIR/config.json" ]] || die "Local Qwen3.5 model/config is missing: $MODEL_DIR"
 
-if [[ -z "$CONDA_EXE" ]]; then
-  CONDA_EXE="$(command -v conda || true)"
-  if [[ -z "$CONDA_EXE" ]]; then
-    for candidate in /root/miniconda3/bin/conda /root/anaconda3/bin/conda /opt/conda/bin/conda; do
-      if [[ -x "$candidate" ]]; then CONDA_EXE="$candidate"; break; fi
-    done
-  fi
-fi
 [[ -n "$CONDA_EXE" && -x "$CONDA_EXE" ]] || die "Conda was not found; set CONDA_EXE=/absolute/path/to/conda."
 
 export_root=""
@@ -88,11 +87,11 @@ unset QWEN_EXTERNAL_STRICT_VALIDATION
 if [[ "$review_mode" == "approved" ]]; then
   note "Checking the hash-bound per-question evidence review before formal inference."
   [[ -f "$export_root/evidence_review.json" ]] || die "Missing per-question evidence review. Use stages 28/29; legacy three-checkbox review alone is insufficient."
-  "$CONDA_EXE" run --no-capture-output --name "$THOR20_ENV" \
+  "$CONDA_EXE" run --no-capture-output "${thor_validation_selector[@]}" \
     python "$PROJECT_DIR/evidence_workflow.py" check \
     --export-root "$export_root" --form "$export_root/evidence_review.json"
-  note "Running strict export/review validation in the separate $THOR20_ENV Conda environment before model inference."
-  "$CONDA_EXE" run --no-capture-output --name "$THOR20_ENV" \
+  note "Running strict export/review validation in the THOR environment before model inference."
+  "$CONDA_EXE" run --no-capture-output "${thor_validation_selector[@]}" \
     python "$PROJECT_DIR/validate.py" "$export_root" --strict
   export QWEN_EXTERNAL_STRICT_VALIDATION=pass
 else

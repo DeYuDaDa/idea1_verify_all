@@ -5,8 +5,8 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh"
 resolve_conda
 note() { printf '[19_continue_model_setup] %s\n' "$*"; }
 
-MODEL_DIR="${QWEN_MODEL_DIR:-/root/autodl-tmp/model/qwen3.5-4b}"
-ENV_PREFIX="${QWEN_ENV_PREFIX:-${DATA_ROOT%/}/model_env}"
+MODEL_DIR="$QWEN_MODEL_DIR"
+ENV_PREFIX="$QWEN_ENV_PREFIX"
 PIP_CACHE="${PIP_CACHE_DIR:-${DATA_ROOT%/}/pip_cache}"
 TMPDIR="${TMPDIR:-${DATA_ROOT%/}/tmp}"
 CONDA_PKGS_DIRS="${CONDA_PKGS_DIRS:-${DATA_ROOT%/}/conda_pkgs}"
@@ -35,7 +35,7 @@ package_evidence() {
   local -a report_args=(--status "$status" --env-prefix "$ENV_PREFIX" --model-dir "$MODEL_DIR" \
     --report "$report" --process-file "$proc_file" --detail "$detail")
   [[ "$runtime" == yes ]] && report_args+=(--runtime)
-  run_python "$helper" "${report_args[@]}"
+  THOR_DISABLE_GRAPHICS_ENV=1 run_python "$helper" "${report_args[@]}"
   cp -- "$report" "$bundle_dir/"
   cp -- "$_lso_log" "$bundle_dir/"
   tar -czf "$bundle" -C "$(dirname -- "$bundle_dir")" "$(basename -- "$bundle_dir")"

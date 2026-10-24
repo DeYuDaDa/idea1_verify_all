@@ -1,27 +1,23 @@
 # Linux server operation
 
-Current task (2026-10-22): skip stage 30 and follow [31_机制探测与困难组.md](31_机制探测与困难组.md). Stage 31 runs private native mechanism probes in the existing simulator environment; it does not load a model or generate approved hard-group data. The conditional designs are in `../hard_group_plan.json` and `../困难组设计与机制依赖.md`.
+Research task after deployment (2026-10-22): skip stage 30 and follow [31_机制探测与困难组.md](31_机制探测与困难组.md). Stage 31 runs private native mechanism probes in the existing simulator environment; it does not load a model or generate approved hard-group data. The conditional designs are in `../hard_group_plan.json` and `../困难组设计与机制依赖.md`.
 
 Earlier evidence-quality workflow: [30_工作流核验与下一步.md](30_工作流核验与下一步.md). Stages 28/29 prepare and check per-question evidence review; they do not generate scenes or repair camera views. These are not prerequisites for stage 31. Formal model inference retains its existing review checks.
 
 These scripts are for the Linux machine only. Run them from the repository checkout or another working directory; each script locates the project from its own location. Do not run these stages on the Windows authoring machine.
 
-The matching server paths are:
+## Deployment moved on 2026-10-23
 
-- Project: `/root/idea1_verify_all/idea1_firsttest_20sample`
-- New data, logs, reports, caches and model environment: `/root/autodl-tmp/idea1_firsttest_20sample`
-- Export root: `/root/autodl-tmp/idea1_firsttest_20sample/exports`
-- Legacy data (preserved): `/root/will_not_be_push_to_git/idea1_firsttest_20sample`
-- Local model: `/root/autodl-tmp/model/qwen3.5-4b`
+The current target is an ordinary Linux server, non-root user, home `/home/mdy`, with no Conda installed. Start with [32_user_server_migration.md](32_user_server_migration.md). Stages 32/33 provide user-space bootstrap and graphics checks. Do not replay the old privileged AutoDL graphics repairs as a clean-deployment sequence.
 
-The scripts accept `PROJECT_DIR`, `DATA_ROOT`, `CONDA_EXE`, `CONDA_ENV`, and `THOR_PLATFORM` overrides. For example:
+| Setting | Ordinary Linux (`home`) | Previous AutoDL (`autodl`) |
+|---|---|---|
+| Checkout | `$HOME/idea1_verify_all/idea1_firsttest_20sample` | same home-relative location |
+| DATA_ROOT | `$HOME/experiment_data/idea1_firsttest_20sample` | `$HOME/autodl-tmp/idea1_firsttest_20sample` |
+| QWEN_MODEL_DIR | `$HOME/model/qwen3.5-4b` | `$HOME/autodl-tmp/model/qwen3.5-4b` |
+| Legacy evidence | `$HOME/will_not_be_push_to_git/idea1_firsttest_20sample` | same home-relative location |
 
-```bash
-PROJECT_DIR=/root/idea1_verify_all/idea1_firsttest_20sample \
-DATA_ROOT=/root/autodl-tmp/idea1_firsttest_20sample \
-CONDA_ENV=thor20 THOR_PLATFORM=CloudRendering \
-bash /root/idea1_verify_all/idea1_firsttest_20sample/linux_server_operation/00_preflight.sh
-```
+`server_paths.sh` selects `THOR_SERVER_PROFILE=auto|home|autodl`; explicit environment overrides win. Scripts discover PROJECT_DIR from their own checkout. New data and environments stay outside Git. The machine-specific settings and full command order are in the migration guide; load that profile in each new shell. No script changes HOME to impersonate another machine.
 
 Run each file with `bash path/to/stage.sh`; executable-bit changes are not needed. Scripts use strict Bash error handling and record console output in timestamped files under `$DATA_ROOT/logs`. `00_preflight.sh` also writes a compact machine report there. The report intentionally excludes environment-variable values and credentials.
 
@@ -35,17 +31,17 @@ Run each file with `bash path/to/stage.sh`; executable-bit changes are not neede
 6. `05_generate_all.sh` is the explicit full generation stage. It passes `--resume` and writes under the same export root. No other stage starts a full generation run.
 7. `04b_inspect_pilot.sh` prints the six-pair diagnostic report without approving it. `06_validate.sh [EXPORT_ROOT] [PAIRS]` runs strict validation; the optional path defaults to `$DATA_ROOT/exports`, and an optional comma-separated PAIRS limits validation to a reviewed subset. The validator's nonzero status is preserved.
 8. `06a_prepare_review.sh` creates a review form; `06b_apply_review.sh FORM REVIEWER` records a completed review. `07_package_offline.sh [EXPORT_ROOT] [OUTPUT_FILE] [PAIRS]` packages only public input data, optionally for a reviewed subset. Defaults are the export root and `$DATA_ROOT/offline_public_input.zip`.
-9. `09_fix_vulkan.sh` installs only `libvulkan1` and `vulkan-tools`, then checks actual NVIDIA enumeration. Its `--check-only` mode does not install packages. On the current server this and the stage 12 EGL repair have already succeeded; the remaining blocker is build downloading, covered by stage 13.
+9. `09_fix_vulkan.sh` installs only `libvulkan1` and `vulkan-tools`, then checks actual NVIDIA enumeration. Its `--check-only` mode does not install packages. These repairs succeeded on the previous AutoDL host. They do not establish graphics readiness on the new host. New non-root deployments use stage 33 instead.
 10. `10_diagnose_nvidia_icd.sh` collects library, ICD and isolated loader probes. It writes diagnostic files outside Git; it does not install packages, rewrite system driver configuration or start Unity.
 11. `11_trace_vulkan_init.sh` follows initialization-time library and device access after stage 10 has ruled out the basic path and gpucomp hypotheses. See `11_vulkan_init_trace.md` for the next command and optional strace installation. It does not install NVIDIA drivers or launch Unity.
 12. `12_fix_egl.sh` addresses the missing `libEGL.so.1` confirmed by stage 11. It requests Ubuntu `libegl1` and required dependencies, verifies actual NVIDIA Vulkan enumeration, and optionally runs the existing smoke probe. See `12_egl_repair.md` for the current server command and evidence paths.
 13. `13_prepare_thor_build.sh` prepares the CloudRendering build separately from simulator startup. See `13_thor_build.md` for bounded, resumable downloading or importing a manually uploaded ZIP. Only after local cache preparation should stage 03 run.
 14. `14_collect_pilot_evidence.sh` packages existing candidate frames/states, original pilot logs and representative failed attempts for diagnosis. It does not start the simulator or approve review forms. Its bundle contains private scoring data for human/code review and must not be used as model input; see `14_pilot_diagnosis.md`.
 
-Current server continuation: see `25_this_round_commands.md`. The new 40 tests and three camera checks passed; stage 21 published 14 pairs (28 candidate records), with 6 construction failures. Stages 19/22 failed because torchvision was omitted, before any model answer. The pinned dependency is now included in 17/19; use 19 to repair the existing environment, then smoke/screen existing candidates. Do not regenerate them. Stage 24 collects the current dataset ZIP, environment evidence, model logs and raw outputs into one archive under DATA_ROOT/logs. No candidate is automatically visually approved and no update-scope error has yet been observed from this batch.
+Historical 2026-10-18 continuation is preserved in stages 25–27. The prior model run and single-question recheck completed; do not follow obsolete missing-torchvision status notes as a description of the new host. New deployments start with 32, then continue the selected experiment workflow.
 
-See `08_after_smoke.md` for the pilot inspection/review/package sequence and the full-generation command. Older stage notes retain historical output paths; `common.sh` now defaults to the data disk. Use an explicit `DATA_ROOT` only when intentionally inspecting old output.
+See `08_after_smoke.md` for the pilot inspection/review/package sequence and the full-generation command. Older stage notes retain historical output paths; current paths come from `server_paths.sh`. Use an explicit `DATA_ROOT` only when intentionally inspecting old output.
 
-For first-run commands, use `00_start_here.md`. Recommended order: preflight, environment setup, reviewed unit checks, graphics readiness and stage 13 build preparation, smoke, pilot, inspect and validate the pilot, then decide whether to run the full generation stage. Validate again before packaging. A pilot is intentionally separate from the full run.
+For new-host installation commands, use `32_user_server_migration.md`. `00_start_here.md` is the old AutoDL first-run record. Recommended order: preflight, environment setup, reviewed unit checks, graphics readiness and stage 13 build preparation, smoke, pilot, inspect and validate the pilot, then decide whether to run the full generation stage. Validate again before packaging. A pilot is intentionally separate from the full run.
 
 If a stage fails, its command output remains in that stage's log. Resolve the reported prerequisite or simulator error and rerun the relevant stage. Stage 09 may invoke `apt` for the two stated Vulkan packages; stage 11 may install `strace` when explicitly requested; stage 12 requests `libegl1` and its required dependencies, which can include Mesa EGL. These use root or noninteractive `sudo`. No stage installs NVIDIA kernel drivers or evaluates shell code from environment values.

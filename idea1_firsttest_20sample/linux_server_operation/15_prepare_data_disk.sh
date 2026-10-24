@@ -6,9 +6,9 @@ print_settings
 resolve_conda
 env_exists || die "Conda environment '$CONDA_ENV' is missing; run 01_setup_env.sh first."
 
-task_old_root="${OLD_DATA_ROOT:-/root/will_not_be_push_to_git/idea1_firsttest_20sample}"
+task_old_root="$OLD_DATA_ROOT"
 task_model_env="$CONDA_ENV"
-task_model_dir="/root/autodl-tmp/model/qwen3.5-4b"
+task_model_dir="$QWEN_MODEL_DIR"
 while (($#)); do
   case "$1" in
     --old-data-root) (($# >= 2)) || die "--old-data-root requires a path"; task_old_root="$2"; shift 2 ;;

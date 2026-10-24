@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import math
+import os
 import shutil
 import sys
 import time
@@ -20,7 +21,15 @@ from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_OUTPUT = Path('/root/autodl-tmp/idea1_firsttest_20sample/exports')
+_SERVER_HOME = Path(os.environ.get('SERVER_HOME') or Path.home())
+_SERVER_PROFILE = os.environ.get('THOR_SERVER_PROFILE', 'auto')
+_AUTODL_ROOT = _SERVER_HOME / 'autodl-tmp'
+_DATA_ROOT_DEFAULT = Path(os.environ.get('DATA_ROOT') or (
+    _AUTODL_ROOT / 'idea1_firsttest_20sample'
+    if _SERVER_PROFILE == 'autodl' or (_SERVER_PROFILE == 'auto' and _AUTODL_ROOT.is_dir() and os.access(_AUTODL_ROOT, os.W_OK))
+    else _SERVER_HOME / 'experiment_data' / 'idea1_firsttest_20sample'
+))
+DEFAULT_OUTPUT = _DATA_ROOT_DEFAULT / 'exports'
 ALL_PAIRS = ('M01','M02','M03','M04','S05','S06','S07','W08','W09','W10',
              'W11','W12','C13','C14','C15','T16','T17','T18','B19','P20')
 CAPABILITY = {'isCooked':'cookable', 'isDirty':'dirtyable',

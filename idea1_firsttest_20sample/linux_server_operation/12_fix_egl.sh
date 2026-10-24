@@ -90,7 +90,7 @@ if (( task_final_status == 0 && task_egl_status == 0 )); then
     task_vulkan_status=127
   else
     set +e
-    timeout 45s "$CONDA_EXE" run --no-capture-output -n "$CONDA_ENV" "$task_vulkaninfo" --summary > vulkaninfo.stdout.txt 2>&1
+    timeout 45s "$CONDA_EXE" run --no-capture-output "${_lso_conda_selector[@]}" "$task_vulkaninfo" --summary > vulkaninfo.stdout.txt 2>&1
     task_vulkan_status=$?
     set -e
   fi
@@ -107,7 +107,7 @@ if (( task_final_status == 0 && task_egl_status == 0 )); then
     task_final_status=1
     set +e
     if [[ -n "$task_vulkaninfo" ]]; then
-      timeout 45s "$CONDA_EXE" run --no-capture-output -n "$CONDA_ENV" env LD_DEBUG=libs,files "$task_vulkaninfo" --summary > vulkaninfo_ld_debug.stdout.txt 2> vulkaninfo_ld_debug.stderr.txt
+      timeout 45s "$CONDA_EXE" run --no-capture-output "${_lso_conda_selector[@]}" env LD_DEBUG=libs,files "$task_vulkaninfo" --summary > vulkaninfo_ld_debug.stdout.txt 2> vulkaninfo_ld_debug.stderr.txt
     else
       printf 'vulkaninfo is unavailable; no loader trace was attempted.\n' > vulkaninfo_ld_debug.stdout.txt
       : > vulkaninfo_ld_debug.stderr.txt

@@ -1,26 +1,30 @@
-# 首轮 20 组事实影响范围诊断
+# 首轮事实影响范围诊断与后续机制探测
 
-本目录设计为 20 组 A/B 配对、40 条场景记录。2026-10-18 服务器已完成环境和真实试启动。首轮六组试生成得到 C13、M01、B19 三组、六条候选；T16、S05、P20 构造失败。C13/B19 的机制对照通过，M01 有额外位置差异待查，所有候选均未完成图像、初始控制和知识条件审核，不能称为验收完成的数据集。Windows 端不运行 Python、测试、模拟器或安装环境。
+原始 pilot 设计为 20 组 A/B 配对、40 条场景记录。旧 AutoDL 于 2026-10-18 发布了 14 组、28 条候选并运行模型，单题复核保留 C14_B/W09_B 为待进一步定位的错误实例；不能把发布数量、程序校验或几条 bad case 当作完整数据集已验收。后续机制探测与困难组是另外的工作，见阶段 31。
 
-## 路径约定
+## 服务器迁移：当前从这里开始
 
-当前租用服务器配置由用户提供：单张 RTX 4090、20 核 CPU、90 GB RAM。后续批量生成可测试多进程并发；目前先审核首轮候选并减少无效放置重试。并发将以独立 Controller、独立输出和日志为单位，同一对 A/B 留在同一工作进程内；先测两路实际吞吐与资源占用，再决定是否增加，不预先承诺线性加速。
+2026-10-23 迁移到普通 Linux 服务器 `/home/mdy`，没有 root 权限、没有预装 Conda。请按 [32：无 root 权限迁移](linux_server_operation/32_user_server_migration.md) 上传材料并依次部署，不再把旧 `00_start_here.md` 的 AutoDL 首次流程当作新机器安装指南。Windows 端仍不运行 Python、测试、模拟器或安装环境。
 
-| 用途 | Windows | Linux 服务器 |
+| 用途 | 当前普通 Linux | 原 AutoDL |
 |---|---|---|
-| Git 根目录 | `主线1/idea1_verify_all` | `/root/idea1_verify_all` |
-| 本实验代码 | `idea1_verify_all/idea1_firsttest_20sample` | `/root/idea1_verify_all/idea1_firsttest_20sample` |
-| Git 外材料与输出 | `主线1/will_not_be_push_to_git` | `/root/will_not_be_push_to_git` |
+| 本实验代码 | `/home/mdy/idea1_verify_all/idea1_firsttest_20sample` | `/root/idea1_verify_all/idea1_firsttest_20sample` |
+| DATA_ROOT：输出、日志、缓存、独立模型环境 | `/home/mdy/experiment_data/idea1_firsttest_20sample` | `/root/autodl-tmp/idea1_firsttest_20sample` |
+| QWEN_MODEL_DIR：本地完整模型 | `/home/mdy/model/qwen3.5-4b` | `/root/autodl-tmp/model/qwen3.5-4b` |
+| 旧证据可选迁入目录 | `/home/mdy/will_not_be_push_to_git/idea1_firsttest_20sample` | `/root/will_not_be_push_to_git/idea1_firsttest_20sample` |
+| THOR 原始 ZIP 与 SHA-256 | `/home/mdy/installers/ai2thor` | `/root/installers/ai2thor` |
 
-从第 15 步起，服务器默认数据根改为数据盘 `/root/autodl-tmp/idea1_firsttest_20sample`，生成结果、日志、环境和缓存都放在此处。现有模型目录为 `/root/autodl-tmp/model/qwen3.5-4b`。旧根 `/root/will_not_be_push_to_git/idea1_firsttest_20sample` 保留，第 15 步只复制必要候选与 Unity 缓存，不删除旧材料。
+脚本通过 `linux_server_operation/server_paths.sh` 选择 home/autodl 配置。以真实 `$HOME` 为基础，显式环境变量优先；需要大容量盘时覆盖 DATA_ROOT/QWEN_MODEL_DIR 即可。`PROJECT_DIR` 默认由脚本位置推导。不要为了复用旧路径把 HOME 改成 `/root`。
 
-## 现在先做什么
+旧机器的 RTX 4090、20 核 CPU、90 GB RAM 是历史配置，不假定新机器相同。新机先通过用户级图形检查、实际 Unity smoke 和相机探针，再继续实验。用户态库可装在 Conda 环境内；系统 NVIDIA 驱动、GPU 分配和设备权限需要管理员提供。迁移不运行旧 apt/ICD 修复流程。
 
-新服务器从 [首轮服务器命令](linux_server_operation/00_start_here.md) 开始。当前服务器的 40 项单测和三目标取景检查已通过；21 发布 14 组、28 条候选，6 组构造失败。19/22 因遗漏 torchvision 在处理器加载时失败，尚无模型回答。依赖已补入安装脚本，按 [本轮继续操作](linux_server_operation/25_this_round_commands.md) 使用 19 修复、试跑并初筛已有候选，再用 24 一次收集原始数据和预测；不必重新生成。新候选仍须逐状态、逐帧审核，不能把发布数量当作数据合格率。
+旧数据保留原样，不因搬家改掉内含的历史绝对路径或来源指纹。需要继续离线模型评测时，另外复制对应公开输入/RGB 和私有核对材料；新路径应由新的运行清单记录。阶段 15 是旧材料复制工具，不是干净部署的必经步骤，不迁入旧数据也可以先完成模拟器部署。
 
-上传的 `2026年10月18日145957.txt` 记录了首轮构造结果，但开始处已截断，缺少 T16 等早期失败的上下文。审核表 `review_form_20261018T070046Z.json` 仅包含六条候选，三个检查项都仍为 false；审核表本身不包含图像或原生前后状态。第 14 步将一次性收集这些原始证据，不更改审核勾选或状态标签。
+## 部署后继续什么
 
-首轮顺序是环境检查、独立 Conda 环境、单元测试、模拟器试启动。成功后再运行六组试生成；不要先启动全部 40 条。任何一步失败都先保留该阶段日志，不需要继续执行后续阶段。
+当前研究入口是 [31：原生机制探测与条件困难组](linux_server_operation/31_机制探测与困难组.md)。它不要求先完成阶段 30，也不自动批准数据或运行模型。先完成迁移文档的本机环境检查，再运行 31。
+
+历史阶段 25–27 记录 2026-10-18 的模型环境修复和单题复核，属于旧服务器过程。torchvision 已纳入 17/19 固定依赖，不需要在新机器重新发现这一缺包问题。新机是否运行成功，以其自己的日志为准。
 
 ## 代码分工
 
@@ -63,9 +67,9 @@
 
 图像、历史、规则、问题和隐藏评分结果导出后，VLM 可在另一平台离线回答，无需 AI2-THOR。公开打包时移除 A/B 文件名提示和原生事实 ID，私有映射留在评分目录。
 
-模型若需要实时选择动作并观察执行结果，才需模拟器在线；当前构造流程不提供该交互评测。当前也未运行任何模型，不预判会出现 under/over-propagation。
+模型若需要实时选择动作并观察执行结果，才需模拟器在线；当前构造流程不提供该交互评测。旧 AutoDL 已完成过离线模型诊断；新服务器尚未运行，不把历史结果当作本机验证。
 
-## 尚未由服务器验证的风险
+## 新服务器仍需验证的部分
 
 Linux/NVIDIA/Vulkan、Unity 构建下载、具体房间的物品组合、容器容量、流水接触区域、热量/烹饪时序和相机视野都需要真实运行。代码保留动作成功与实际状态双重检查，无法用静态审阅替代物理验证。
 

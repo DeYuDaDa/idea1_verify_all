@@ -2,10 +2,11 @@
 # Create an isolated, data-disk Qwen3.5 inference environment and inspect local metadata only.
 set -Eeuo pipefail
 
-DATA_ROOT="${DATA_ROOT:-/root/autodl-tmp/idea1_firsttest_20sample}"
-MODEL_DIR="${QWEN_MODEL_DIR:-/root/autodl-tmp/model/qwen3.5-4b}"
-CONDA_EXE="${CONDA_EXE:-}"
-ENV_PREFIX="${QWEN_ENV_PREFIX:-${DATA_ROOT%/}/model_env}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+source "${SCRIPT_DIR}/server_paths.sh"
+DATA_ROOT="${DATA_ROOT}"
+MODEL_DIR="${QWEN_MODEL_DIR}"
+ENV_PREFIX="${QWEN_ENV_PREFIX}"
 MIN_FREE_KIB=$((20 * 1024 * 1024))
 MIN_INSTALL_HEADROOM_KIB=$((8 * 1024 * 1024))
 
@@ -13,17 +14,16 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 note() { printf '[17_setup_model_env] %s\n' "$*"; }
 
 [[ "$(uname -s)" == Linux ]] || die "Linux server only; this script does not run on Windows."
+task_repo_root="$(realpath -m -- "$SCRIPT_DIR/../..")"
+for task_output_path in "$DATA_ROOT" "$ENV_PREFIX"; do
+  task_output_absolute="$(realpath -m -- "$task_output_path")"
+  case "${task_output_absolute%/}/" in
+    "${task_repo_root%/}/"*) die "Data and environment paths must stay outside Git: $task_output_path" ;;
+  esac
+done
 [[ -d "$MODEL_DIR" ]] || die "Local model directory is missing: $MODEL_DIR. This stage does not download model weights."
 [[ -f "$MODEL_DIR/config.json" ]] || die "Missing local config.json: $MODEL_DIR/config.json"
 
-if [[ -z "$CONDA_EXE" ]]; then
-  CONDA_EXE="$(command -v conda || true)"
-  if [[ -z "$CONDA_EXE" ]]; then
-    for candidate in /root/miniconda3/bin/conda /root/anaconda3/bin/conda /opt/conda/bin/conda; do
-      if [[ -x "$candidate" ]]; then CONDA_EXE="$candidate"; break; fi
-    done
-  fi
-fi
 [[ -n "$CONDA_EXE" && -x "$CONDA_EXE" ]] || die "Conda was not found; set CONDA_EXE=/absolute/path/to/conda. Nothing has been installed."
 
 disk_free_kib() {
