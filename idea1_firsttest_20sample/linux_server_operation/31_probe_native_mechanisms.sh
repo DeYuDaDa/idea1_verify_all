@@ -4,7 +4,7 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/common.sh"
 print_settings
 [[ "$(uname -s)" == Linux ]] || die "Linux server only."
 resolve_conda
-env_exists || die "Existing environment '$CONDA_ENV' is missing; no install was attempted."
+env_exists || die "Existing THOR environment '${THOR_ENV_PREFIX:-$CONDA_ENV}' is missing; load the migrated server.env and complete stage 32 deployment first. No install was attempted."
 command -v flock >/dev/null 2>&1 || die "flock is required to avoid overlapping Unity generation."
 mkdir -p -- "$DATA_ROOT"
 exec 9>"${DATA_ROOT%/}/generation.lock"
