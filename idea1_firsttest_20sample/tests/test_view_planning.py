@@ -33,13 +33,22 @@ class ViewPlanningTests(unittest.TestCase):
 
     def test_sink_groups_fixture_contents_and_fixture_detail(self):
         roles = {"Sink": obj("s", "SinkBasin", {"x": 0, "y": .8, "z": 0}, {"x": 0, "y": .8, "z": 0}, {"x": .9, "y": .4, "z": .7}),
-                 "Faucet": obj("f", "Faucet", {"x": 0, "y": 1.2, "z": 0}, {"x": 0, "y": 1.2, "z": 0}),
+                 # Intentionally omit center/bounds to exercise position-only
+                 # fallback. Supplying center makes obj() create a valid AABB.
+                 "Faucet": obj("f", "Faucet", {"x": 0, "y": 1.2, "z": 0}),
                  "Bowl": obj("b", "Bowl", {"x": .2, "y": .7, "z": 0}, {"x": .2, "y": .7, "z": 0})}
         plan = plan_views(roles, device_family="sink")
         self.assertEqual(plan["focus_roles"], ["Sink", "Faucet", "Bowl"])
         self.assertEqual({g["purpose"] for g in plan["groups"]}, {"joint_relation", "fixture_detail", "contents_detail"})
         self.assertEqual(plan["status"], "planned_with_position_fallbacks")
         self.assertIn("Faucet", plan["groups"][0]["missing_bbox_roles"])
+
+        # The same scene with complete geometry must not report a fallback.
+        roles["Faucet"] = obj("f", "Faucet", {"x": 0, "y": 1.2, "z": 0},
+                              {"x": 0, "y": 1.2, "z": 0})
+        complete = plan_views(roles, device_family="sink")
+        self.assertEqual(complete["status"], "planned")
+        self.assertTrue(all(not group.get("missing_bbox_roles") for group in complete["groups"]))
 
     def test_microwave_contents_and_stove_component_relations(self):
         microwave = {"Microwave": obj("mw", "Microwave", {"x": 2, "y": 1, "z": 3}, {"x": 2, "y": 1, "z": 3}, {"x": .8, "y": 1, "z": .7}),
