@@ -130,8 +130,11 @@ def establish_nested(ctx: Any, *, scene: str, roles: dict[str, str],
 
     `edges` are ordered (child, parent) role pairs. Their order must run from
     the outer object's final support/location toward the innermost content.
-    The `roles` map also carries semantic aliases such as source/basin.
+    The `roles` map carries fixed semantic aliases such as support/source/basin.
+    Bind those supplied IDs here; callers need not prepopulate ctx.roles.
     """
+    for alias, object_id in roles.items():
+        ctx.bind(alias, object_id)
     lists = {role: _candidates(ctx, types, caps, exclude=tuple(k for k in roles if k != role))
              for role, (types, caps) in candidates.items()}
     empty = [role for role, rows in lists.items() if not rows]
@@ -156,13 +159,17 @@ def establish_nested(ctx: Any, *, scene: str, roles: dict[str, str],
     for index, chosen in enumerate(combos, 1):
         if index > 1:
             _reset(ctx, scene, index)
-            if after_reset is not None:
-                after_reset(ctx)
+        # A reset/capture adapter may clear bindings. Restore fixed roles before
+        # the callback (e.g. reopening the bound microwave) or any placement.
+        for alias, object_id in roles.items():
+            ctx.bind(alias, object_id)
+        if index > 1 and after_reset is not None:
+            after_reset(ctx)
         for role, obj in chosen.items():
             ctx.bind(role, obj["objectId"])
         attempt = {"trial": index,
                    "roles": {k: {"objectId": ctx.roles[k], "objectType": ctx.obj(k).get("objectType")}
-                             for k in roles.keys() | candidates.keys()},
+                             for k in dict.fromkeys((*roles, *candidates))},
                    "placements": []}
         try:
             for child, parent in edges:

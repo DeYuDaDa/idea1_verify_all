@@ -90,6 +90,8 @@ class FakeContext:
         self.session.metadata = copy.deepcopy(self._baseline)
         self.session.records = []
         self.session.held = None
+        # Exercise the helper contract even when a reset clears role bindings.
+        self.roles.clear()
 
     def move_setup(self, child, parent):
         return self.ops.place_initial(self.roles.get(child, child), self.roles.get(parent, parent))
@@ -104,8 +106,7 @@ class FakeContext:
 class NestedSetupTests(unittest.TestCase):
     def test_outer_to_inner_order_and_plan_include_alias_types(self):
         ctx = FakeContext()
-        # No failure in this contract: select the second native Bowl so the
-        # collision branch below does not consume the successful case.
+        # No failure in this contract; keep the first candidate valid.
         ctx.ops.fail_point_for.clear()
         ctx.ops.fail_put_for.clear()
         plan = establish_nested(ctx, scene="FloorPlan1", roles={"support": "support"},
@@ -119,22 +120,29 @@ class NestedSetupTests(unittest.TestCase):
         self.assertEqual(plan["placement_order"],
                          ["outer->support", "inner->outer", "content->inner"])
         self.assertEqual(plan["selected_roles"]["inner"]["objectType"], "Bowl")
+        self.assertEqual(ctx.roles["support"], "support")
+        self.assertEqual(plan["selected_roles"]["support"]["objectType"], "CounterTop")
 
     def test_collision_is_recorded_and_search_continues_with_reset(self):
         ctx = FakeContext()
         # Both point placement and native PutObject fail for the first Bowl;
-        # the next real Bowl succeeds through the native fallback.
+        # a subsequent real Bowl succeeds after the failed trials are reset.
+        reset_supports = []
         plan = establish_nested(ctx, scene="FloorPlan1", roles={"support": "support"},
             candidates={"outer": (("Plate",), ("pickupable", "receptacle")),
                         "inner": (("Bowl",), ("pickupable", "receptacle")),
                         "content": (("Apple",), ("pickupable",))},
             edges=(("outer", "support"), ("inner", "outer"), ("content", "inner")),
-            max_trials=12)
+            max_trials=12,
+            after_reset=lambda current: reset_supports.append(current.roles["support"]))
         self.assertGreaterEqual(len(plan["attempts"]), 2)
         first_inner = plan["attempts"][0]["placements"][1]
         self.assertIn("native placement collision", first_inner["paths"][0]["error"])
         self.assertIn("native PutObject destination constraint", first_inner["fallback"]["error"])
         self.assertEqual(ctx.roles["inner"], "inner_b")
+        self.assertTrue(reset_supports)
+        self.assertTrue(all(oid == "support" for oid in reset_supports))
+        self.assertEqual(ctx.roles["support"], "support")
         self.assertTrue(all(row["relation_verified_both_directions"]
                             for row in plan["attempts"][-1]["post_settle_relations"]))
 

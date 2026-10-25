@@ -24,7 +24,11 @@ done
 # Only new mechanism contract tests. No stage-30 pipeline or model env is used.
 run_python -m compileall -q mechanism_probe.py mechanism_probe_common.py mechanism_probes_thermal_liquid.py mechanism_probes_relations.py view_planning.py observation_views.py nested_setup.py
 for pattern in 'test_mechanism*.py' 'test_view_planning.py' 'test_observation_views.py' 'test_nested_setup.py'; do
-  run_python -m unittest discover -s tests -p "$pattern" -v
+  if run_python -m unittest discover -s tests -p "$pattern" -v; then
+    :
+  else
+    die "Mechanism preflight tests failed: $pattern. Unity has not started, no new mechanism data exists, and no mechanism ZIP was generated. Preserve this stage log."
+  fi
 done
 run_python "${PROJECT_DIR%/}/mechanism_probe.py" --list "${probe_selection[@]}"
 run_python "${PROJECT_DIR%/}/linux_server_operation/13_thor_build.py" --check-cache --data-root "$DATA_ROOT"
