@@ -84,6 +84,8 @@ def main(argv=None) -> int:
     parser.add_argument("--max-scenes", type=int, default=2)
     parser.add_argument("--sample-steps", default="0,1,4,12,36")
     parser.add_argument("--seed", type=int, default=17)
+    parser.add_argument("--view-mode", choices=("planned", "agent"), default="planned",
+                        help="planned uses role-based evidence cameras; agent is a diagnostic baseline")
     parser.add_argument("--platform", choices=("Linux64", "CloudRendering"), default="CloudRendering")
     server_home = Path(os.environ.get("SERVER_HOME") or Path.home())
     server_profile = os.environ.get("THOR_SERVER_PROFILE", "auto")
@@ -136,7 +138,7 @@ def main(argv=None) -> int:
     config = json.loads(args.config.read_text(encoding="utf-8"))
     source_files = ("mechanism_probe.py", "mechanism_probe_common.py", "mechanism_probes_thermal_liquid.py",
                     "mechanism_probes_relations.py", "runtime.py", "interactions.py", "frame_evidence.py",
-                    "hard_group_plan.json", "config.json")
+                    "hard_group_plan.json", "config.json", "view_planning.py", "observation_views.py", "nested_setup.py")
     versions, version_errors = {}, {}
     for name in ("ai2thor", "numpy", "Pillow"):
         try:
@@ -186,7 +188,8 @@ def main(argv=None) -> int:
                             local_executable_path=args.local_executable_path, commit_id=COMMIT)
                     else:
                         session.reset(scene)
-                    ctx = ProbeContext(session, case_out, sample_steps=steps, seed=args.seed)
+                    ctx = ProbeContext(session, case_out, sample_steps=steps, seed=args.seed,
+                                       view_mode=args.view_mode, family=case.family)
                     write_json(case_out / "inventory.json", inventory(session.snapshot()))
                     ctx.capture("scene_initial")
                     result = case.run(ctx)
@@ -213,6 +216,14 @@ def main(argv=None) -> int:
                             row["role_bindings"] = ctx.roles
                             row["capture_count"] = len(ctx.captures)
                             row["capture_errors"] = [c["capture_error"] for c in ctx.captures if "capture_error" in c]
+                            row["view_mode"] = args.view_mode
+                            row["image_view_count"] = sum(len(c.get("view_frames", [])) for c in ctx.captures)
+                            row["visual_capture_status"] = "needs_review" if not row["capture_errors"] else "capture_incomplete"
+                            if ctx.evidence_cameras.contaminated or ctx.evidence_cameras.unhealthy:
+                                row["native_observation_status"] = row["status"]
+                                row["status"] = "inconclusive"
+                                row["native_measurement_valid"] = False
+                                row["observation_invalid_reason"] = "camera_intervention_changed_state_or_failed_to_restore_physics"
                         except Exception as exc:
                             row["final_capture_error"] = f"{type(exc).__name__}: {exc}"
                     write_json(case_out / "result.json", row)
@@ -221,7 +232,7 @@ def main(argv=None) -> int:
                     rows.append({k: value for k, value in row.items() if k not in {"observation", "traceback"}})
                     write_json(out / "summary.json", summarise(rows, selected, metadata))
                     print(f"{case.case_id} {scene}: {row['status']} ({row['elapsed_wall_seconds']:.1f}s)", flush=True)
-                    if case.fact_id in {"F9", "F11"} and session is not None:
+                    if (case.fact_id in {"F9", "F11"} or (ctx is not None and ctx.evidence_cameras.unhealthy)) and session is not None:
                         # These probes manipulate auto-simulation. A fresh
                         # process prevents an unsupported unpause/reset path
                         # from contaminating subsequent experiments.

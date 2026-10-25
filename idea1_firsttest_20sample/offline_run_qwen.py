@@ -384,8 +384,9 @@ def _load_images(sample: dict[str, Any]):
     return images
 
 
-def _infer_one(model, processor, sample: dict[str, Any], device: str, max_new_tokens: int) -> dict[str, Any]:
-    prompt, qid_to_fact_id = build_prompt(sample["model_input"])
+def _infer_one(model, processor, sample: dict[str, Any], device: str, max_new_tokens: int,
+               prompt_bundle: tuple[str, dict[str, str]] | None = None) -> dict[str, Any]:
+    prompt, qid_to_fact_id = prompt_bundle if prompt_bundle is not None else build_prompt(sample["model_input"])
     images = _load_images(sample)
     try:
         content = [{"type": "image", "image": image} for image in images]
@@ -486,9 +487,10 @@ def run(args: argparse.Namespace) -> Path:
         torch.cuda.synchronize()
         for sample in pending:
             started = time.perf_counter()
-            _, expected_map = build_prompt(sample["model_input"])
+            request_text, expected_map = build_prompt(sample["model_input"])
             try:
-                outcome = _infer_one(model, processor, sample, "cuda:0", args.max_new_tokens)
+                outcome = _infer_one(model, processor, sample, "cuda:0", args.max_new_tokens,
+                                     prompt_bundle=(request_text, expected_map))
                 status = "complete"
                 error = None
             except Exception as exc:
@@ -503,6 +505,9 @@ def run(args: argparse.Namespace) -> Path:
                    "source_fingerprint": sample["source_fingerprint"],
                    "media_sha256": [item["sha256"] for item in sample["media"]],
                    "model_config_sha256": model_identity["config_sha256"],
+                   "request_text": request_text,
+                   "request_content_order": "ordered_images_then_text",
+                   "request_text_boundary": "User text supplied to apply_chat_template; not expanded template or image patches. An error row may precede successful processor/model execution.",
                    "versions": versions, "settings": settings, "error": error,
                    "total_seconds": round(time.perf_counter() - started, 4), **outcome}
             with predictions_path.open("a", encoding="utf-8") as stream:

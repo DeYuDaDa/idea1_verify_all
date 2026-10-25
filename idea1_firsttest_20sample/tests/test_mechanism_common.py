@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from mechanism_probe_common import ProbeContext, ProbeUnavailable
+from mechanism_probe_common import ProbeContext, ProbeUnavailable, native_temperature
 
 
 class Session:
@@ -24,6 +24,31 @@ class Session:
 
 
 class CommonContractTests(unittest.TestCase):
+    def test_real_temperature_key_and_legacy_query_spellings_agree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = Session()
+            obj = session.metadata["objects"][0]
+            obj.pop("ObjectTemperature")
+            obj["temperature"] = "Hot"
+            ctx = ProbeContext(session, Path(tmp) / "trial")
+            ctx.bind("Cup", "mug_a")
+            self.assertEqual(ctx.field("Cup", "temperature"), "Hot")
+            self.assertEqual(ctx.field("Cup", "ObjectTemperature"), "Hot")
+            self.assertNotIn("ObjectTemperature", session.metadata["objects"][0])
+
+    def test_missing_temperature_is_unknown_and_null_can_use_legacy_field(self):
+        self.assertIsNone(native_temperature({}))
+        self.assertEqual(native_temperature({"temperature": None, "ObjectTemperature": "RoomTemp"}), "RoomTemp")
+
+    def test_native_setup_placement_failure_is_unavailable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = ProbeContext(Session(), Path(tmp) / "trial")
+            def blocked(*args):
+                raise RuntimeError("Spawn area not clear")
+            ctx.ops.place_initial = blocked
+            with self.assertRaisesRegex(ProbeUnavailable, "Spawn area not clear"):
+                ctx.move_setup("mug_a", "counter")
+
     def test_missing_inventory_is_unavailable_not_created(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = Session()

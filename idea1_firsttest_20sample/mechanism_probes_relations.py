@@ -143,7 +143,7 @@ def _f7(condition: str) -> Callable[[Any], dict[str, Any]]:
             # Make the intervening removal a real setup placement, then use a
             # fresh placement for the return condition. Each ProbeCase receives
             # a clean scene reset from the runner.
-            ctx.ops.place_initial(ctx.roles["child"], ctx.roles["surface"])
+            ctx.move_setup("child", "surface")
             removed = ctx.roles["container"] not in _parents(ctx.obj("child"))
             _check(ctx, "child_removed_before_event", removed,
                    {"child": ctx.obj("child"), "container": ctx.roles["container"]})
@@ -519,48 +519,30 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
     def run(ctx: Any) -> dict[str, Any]:
         case_id = f"F10_nested_{kind}"
         checks, steps = ctx.checks, []
+        from nested_setup import establish_nested
         if kind == "carry":
-            _bind_selected(ctx, "outer", "Plate", "pickupable")
-            _bind_selected(ctx, "inner", "Bowl", "pickupable")
-            _bind_selected(ctx, "content", "Apple", "pickupable")
-            ctx.move_setup("content", "inner")
-            ctx.require(ctx.roles["inner"] in _parents(ctx.obj("content")),
-                        "F10 carry setup failed: content is not related to inner container")
-            content_before_inner_move = ctx.obj("content")
-            inner_before_outer_move = ctx.obj("inner")
-            ctx.move_setup("inner", "outer")
-            inner_parent_after_setup = ctx.roles["outer"] in _parents(ctx.obj("inner"))
-            content_parent_after_setup = ctx.roles["inner"] in _parents(ctx.obj("content"))
-            inner_setup_delta = _vector_delta(inner_before_outer_move.get("position"),
-                                              ctx.obj("inner").get("position"))
-            content_setup_delta = _vector_delta(content_before_inner_move.get("position"),
-                                                ctx.obj("content").get("position"))
-            setup_relative_before = _vector_delta(inner_before_outer_move.get("position"),
-                                                  content_before_inner_move.get("position"))
-            setup_relative_after = _vector_delta(ctx.obj("inner").get("position"),
-                                                 ctx.obj("content").get("position"))
-            setup_motion_error = _vector_error(inner_setup_delta, content_setup_delta)
-            setup_relative_error = _vector_error(setup_relative_before, setup_relative_after)
-            _check(ctx, "nested_relation_chain_survived_setup", inner_parent_after_setup and content_parent_after_setup,
-                   {"outer": ctx.obj("outer"), "inner": ctx.obj("inner"), "content": ctx.obj("content")})
-            ctx.require(inner_parent_after_setup and content_parent_after_setup,
-                        "F10 carry setup failed: nested relation chain was lost while placing inner in outer")
-            ctx.require(setup_motion_error is not None and setup_motion_error < 0.10 and
-                        setup_relative_error is not None and setup_relative_error < 0.10,
-                        f"F10 carry setup failed: content did not follow inner while placing inner in outer; "
-                        f"motion_error={setup_motion_error!r}, relative_error={setup_relative_error!r}")
+            surface = ctx.select("support", "CounterTop", capability="receptacle")
+            setup = establish_nested(ctx, scene=ctx.session.scene,
+                roles={"support": surface},
+                candidates={
+                    "outer": (("Plate", "Bowl"), ("pickupable", "receptacle")),
+                    "inner": (("Bowl", "Cup", "Mug"), ("pickupable", "receptacle")),
+                    "content": (("Apple", "Potato"), ("pickupable",)),
+                },
+                edges=(("outer", "support"), ("inner", "outer"), ("content", "inner")))
+            ctx.bind("source", ctx.roles["outer"])
+            content_before_event = ctx.obj("content")
+            inner_before_event = ctx.obj("inner")
             relative_before = _vector_delta(ctx.obj("inner").get("position"),
                                             ctx.obj("content").get("position"))
-            _check(ctx, "content_remained_in_inner_when_inner_moved_to_outer",
-                   ctx.roles["inner"] in _parents(ctx.obj("content")),
-                   {"content_before_inner_move": content_before_inner_move,
-                    "inner_before_outer_move": inner_before_outer_move,
-                    "content_after_outer_move": ctx.obj("content"),
-                    "relative_position_before": _vector_delta(inner_before_outer_move.get("position"),
-                                                               content_before_inner_move.get("position")),
+            _check(ctx, "nested_chain_confirmed_before_outer_pickup",
+                   ctx.roles["outer"] in _parents(inner_before_event) and
+                   ctx.roles["inner"] in _parents(content_before_event),
+                   {"content_before_event": content_before_event,
+                    "inner_before_event": inner_before_event,
                     "relative_position_after": relative_before,
-                    "setup_motion_error_m": setup_motion_error,
-                    "setup_relative_error_m": setup_relative_error})
+                    "construction_order": ["outer_to_final_support", "inner_into_outer", "content_into_inner"],
+                    "candidate_search": setup})
             before = {name: ctx.obj(name) for name in ("outer", "inner", "content")}
             steps.append(_step(ctx, "pickup_outer", "PickupObject", objectId=ctx.roles["outer"], forceAction=True))
             trajectory = ctx.observe(steps=(0, 1, 4, 12, 36))
@@ -590,19 +572,22 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
             status = "inconclusive" if not moved else ("observed_supported" if passed else "observed_counterexample")
             return _base(case_id, "F10", "nested_carry", status,
                          checks=checks, steps=steps, before=before, after=after,
-                         trajectory=trajectory, motion_metrics=metrics,
+                         trajectory=trajectory, motion_metrics=metrics, construction_plan=setup,
                          interpretation={"only_nested_carry_was_tested": True})
         if kind == "heat":
             _bind_selected(ctx, "source", "Microwave", "toggleable")
-            _bind_selected(ctx, "inner", "Bowl", "pickupable")
-            _bind_selected(ctx, "content", "Potato", "pickupable")
+            ctx.bind("outer", ctx.roles["source"])
             ctx.toggle("source", False)
             ctx.ops.set_open(ctx.roles["source"], True)
             _snapshot(ctx, "microwave_open_for_nested_setup")
-            ctx.move_setup("content", "inner")
-            ctx.require(ctx.roles["inner"] in _parents(ctx.obj("content")),
-                        "F10 nested heat setup failed: potato not in bowl")
-            ctx.move_setup("inner", "source")
+            setup = establish_nested(ctx, scene=ctx.session.scene,
+                roles={"source": ctx.roles["source"], "outer": ctx.roles["outer"]},
+                candidates={
+                    "inner": (("Bowl", "Cup", "Mug"), ("pickupable", "receptacle")),
+                    "content": (("Potato", "Apple"), ("pickupable",)),
+                },
+                edges=(("inner", "outer"), ("content", "inner")),
+                after_reset=lambda current: current.ops.set_open(current.roles["source"], True))
             relation_before_event = {
                 "content_in_inner": ctx.roles["inner"] in _parents(ctx.obj("content")),
                 "inner_in_source": ctx.roles["source"] in _parents(ctx.obj("inner")),
@@ -639,30 +624,27 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
             return _base(case_id, "F10", "nested_heat",
                          "observed_supported" if changed and nested_relation_preserved else "inconclusive",
                          checks=checks, steps=steps, initial_temperature=initial, final_temperature=final,
+                         setup_search=setup,
+                         construction_plan=setup,
                          interpretation={"only_nested_heating_was_tested": True,
                                          "failure_to_change_is_not_a_clean_negative_without_timing_controls": True})
         # Independent wash probe. Use native sink/faucet state and require a
         # real content-property change; basin membership alone is insufficient.
         _bind_selected(ctx, "source", "Faucet", "toggleable")
         _bind_selected(ctx, "basin", "SinkBasin", "receptacle")
-        _bind_selected(ctx, "inner", "Bowl", "pickupable")
-        _bind_selected(ctx, "content", "Plate", "pickupable")
-        if ctx.obj("content").get("dirtyable") is not True:
-            raise ProbeUnavailable("F10 nested wash candidate content is not dirtyable")
-        try:
+        ctx.bind("outer", ctx.roles["basin"])
+        ctx.toggle("source", False)
+        setup = establish_nested(ctx, scene=ctx.session.scene,
+            roles={"source": ctx.roles["source"], "basin": ctx.roles["basin"], "outer": ctx.roles["outer"]},
+            candidates={
+                "inner": (("Bowl", "Cup", "Mug"), ("pickupable", "receptacle")),
+                "content": (("Plate", "Mug", "Cup"), ("pickupable", "dirtyable")),
+            },
+            edges=(("inner", "basin"), ("content", "inner")))
+        if ctx.obj("content").get("isDirty") is not True:
             ctx.ops.set_dirty(ctx.roles["content"], True)
-            ctx.toggle("source", False)
-            ctx.move_setup("content", "inner")
-            ctx.require(ctx.roles["inner"] in _parents(ctx.obj("content")),
-                        "nested wash setup failed: dirty plate is not inside bowl")
-            ctx.move_setup("inner", "basin")
-            ctx.require(ctx.roles["basin"] in _parents(ctx.obj("inner")),
-                        "nested wash setup failed: bowl is not in sink basin")
-        except Exception as exc:
-            return _base(case_id, "F10", "nested_wash", "inconclusive",
-                         checks=checks, steps=steps, reason="unsupported_setup",
-                         setup_error=f"{type(exc).__name__}: {exc}",
-                         interpretation={"failed_nesting_is_not_a_cleaning_counterexample": True})
+            ctx.require(ctx.obj("content").get("isDirty") is True,
+                        "Native set-dirty action did not establish the wash precondition")
         initial = ctx.obj("content").get("isDirty")
         steps.append(_step(ctx, "faucet_on", "ToggleObjectOn", objectId=ctx.roles["source"], forceAction=True))
         for i in range(36):
@@ -679,7 +661,9 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
                 "inner_parent_ids": _parents(ctx.obj("inner")), "content": ctx.obj("content")})
         return _base(case_id, "F10", "nested_wash",
                      "observed_supported" if changed and nested_relation_preserved else "inconclusive",
-                     checks=checks, steps=steps, initial_isDirty=initial, final_isDirty=final,
+                     checks=checks, steps=steps, setup_search=setup,
+                     construction_plan=setup,
+                     initial_isDirty=initial, final_isDirty=final,
                      interpretation={"basin_relation_alone_is_not_water_contact_evidence": True,
                                      "only_nested_cleaning_was_tested": True})
     return run

@@ -1,7 +1,8 @@
 """Private, bounded native-mechanism experiments; no simulator at import time.
 
-Capture reads the current event without moving the camera or advancing physics.
-Neither native metadata nor bbox diagnostics certify a model-visible premise.
+Planned capture uses independent evidence cameras; it never teleports the agent
+or stages objects for photography. Camera interventions and world-state guards
+are recorded separately. Neither masks nor metadata certify semantic evidence.
 """
 from __future__ import annotations
 
@@ -19,6 +20,19 @@ from runtime import ControllerSession, StepResult
 
 class ProbeUnavailable(RuntimeError):
     """The required setup/measurement is unavailable; not a mechanism refutation."""
+
+
+def native_temperature(obj: dict) -> Any:
+    """Read the observed metadata schema, never invent a temperature baseline.
+
+    The uploaded 5.0.0 snapshots use ``temperature``. Some adapters use the
+    documentation/category name ``ObjectTemperature``; accept either query
+    spelling while keeping original snapshots and their keys unchanged.
+    """
+    for key in ("temperature", "ObjectTemperature"):
+        if obj.get(key) is not None:
+            return copy.deepcopy(obj[key])
+    return None
 
 
 @dataclass(frozen=True)
@@ -43,7 +57,8 @@ def position_distance(a: dict, b: dict) -> float:
 
 class ProbeContext:
     def __init__(self, session: ControllerSession, out: Path, *,
-                 sample_steps: Iterable[int] = (0, 1, 4, 12, 36), seed: int = 17):
+                 sample_steps: Iterable[int] = (0, 1, 4, 12, 36), seed: int = 17,
+                 view_mode: str = "planned", family: str = ""):
         self.session = session
         self.ops = Interactions(session, seed=seed)
         self.out = Path(out)
@@ -52,6 +67,9 @@ class ProbeContext:
         self.checks: list[dict] = []
         self.captures: list[dict] = []
         self._action_segments = [session.records]
+        self.view_mode = view_mode
+        from observation_views import EvidenceCameras
+        self.evidence_cameras = EvidenceCameras(session, family=family)
         self.sample_steps = tuple(sorted(set(int(n) for n in sample_steps)))
         if not self.sample_steps or self.sample_steps[0] < 0:
             raise ValueError("sample_steps must contain nonnegative integers")
@@ -80,8 +98,8 @@ class ProbeContext:
 
     def field(self, alias: str, field: str) -> Any:
         obj = self.obj(alias)
-        if field == "temperature":
-            return obj.get("temperature", obj.get("ObjectTemperature"))
+        if field in {"temperature", "ObjectTemperature"}:
+            return native_temperature(obj)
         return copy.deepcopy(obj.get(field))
 
     def require(self, condition: bool, message: str) -> None:
@@ -94,13 +112,20 @@ class ProbeContext:
         return row
 
     def step(self, action: str, **kwargs) -> StepResult:
+        self.require(not self.evidence_cameras.unhealthy,
+                     "Observer could not restore physics; stop this attempt and recycle its controller")
         result = self.session.step(action, raise_on_failure=True, **kwargs)
         self.require(result.record.get("lastActionSuccess") is True, f"{action}: missing success confirmation")
         return result
 
     def move_setup(self, child: str, parent: str):
         child_id, parent_id = self.roles.get(child, child), self.roles.get(parent, parent)
-        return self.ops.place_initial(child_id, parent_id)
+        try:
+            return self.ops.place_initial(child_id, parent_id)
+        except (RuntimeError, ValueError, LookupError) as exc:
+            # Native placement/capacity failures are unavailable setups, not
+            # an implementation crash or a successful mechanism counterexample.
+            raise ProbeUnavailable(f"setup placement {child} -> {parent}: {exc}") from exc
 
     def pickup(self, alias: str):
         return self.ops.pickup_event(self.roles.get(alias, alias))
@@ -131,16 +156,33 @@ class ProbeContext:
                "visual_evidence_review": "not_assessed"}
         if image:
             try:
-                event = self.session.controller.last_event
-                paths = self.session.save_pngs(StepResult(event, metadata, {}), self.out / "rgb",
-                                               stem=f"{index:04d}_{safe_label}", include_instance=False)
-                path = Path(paths["rgb"])
-                relative = path.relative_to(self.out).as_posix()
-                row["rgb_path"] = relative
-                row["frame_diagnostics"] = describe_frame(
-                    event, metadata, self.roles, stage=label, relative_path=relative,
-                    png_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                    capture_action_index=row["action_index"])
+                if self.view_mode == "planned":
+                    report = self.evidence_cameras.capture(metadata, self.roles, self.out / "rgb",
+                                                           f"{index:04d}_{safe_label}")
+                    row["camera_audit"] = {k: v for k, v in report.items() if k != "views"}
+                    views = []
+                    for view in report["views"]:
+                        views.append({**{k:v for k,v in view.items() if k != "path"},
+                                      "rgb_path": Path(view["path"]).relative_to(self.out).as_posix()})
+                    row["view_frames"] = views
+                    row["capture_group_index"] = index
+                    row["view_layout"] = "same_observation_complementary_views"
+                    if views:
+                        row["rgb_path"] = views[0]["rgb_path"]
+                    if report.get("error"):
+                        row["capture_error"] = report["error"]
+                    row["observer_action_range"] = [row["action_index"] + 1, len(self.session.records)-1]
+                else:
+                    event = self.session.controller.last_event
+                    paths = self.session.save_pngs(StepResult(event, metadata, {}), self.out / "rgb",
+                                                   stem=f"{index:04d}_{safe_label}", include_instance=False)
+                    path = Path(paths["rgb"])
+                    relative = path.relative_to(self.out).as_posix()
+                    row["rgb_path"] = relative
+                    row["frame_diagnostics"] = describe_frame(
+                        event, metadata, self.roles, stage=label, relative_path=relative,
+                        png_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                        capture_action_index=row["action_index"])
             except Exception as exc:
                 # Keep native mechanism evidence even if preview generation fails.
                 row["capture_error"] = f"{type(exc).__name__}: {exc}"

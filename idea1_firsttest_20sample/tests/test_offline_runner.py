@@ -2,11 +2,35 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import offline_run_qwen as runner
 
 
 class OfflineRunnerTests(unittest.TestCase):
+    def test_recorded_prompt_bundle_is_the_text_given_to_processor(self):
+        # Stop before image processing/CUDA: verify the audit text cannot drift
+        # from the request through a second independently-built prompt.
+        captured = []
+
+        class StopBeforeProcessing(Exception):
+            pass
+
+        class Processor:
+            def apply_chat_template(self, messages, **kwargs):
+                captured.append(messages)
+                raise StopBeforeProcessing()
+
+        bundle = ("the exact public user text", {"q001": "private_scoring_key"})
+        with patch.object(runner, "_load_images", return_value=[]), \
+                patch.object(runner, "build_prompt", side_effect=AssertionError("must use supplied bundle")):
+            with self.assertRaises(StopBeforeProcessing):
+                runner._infer_one(None, Processor(), {"model_input": {}}, "cuda:0", 1,
+                                  prompt_bundle=bundle)
+        self.assertEqual(captured, [{"role": "user", "content": [
+            {"type": "text", "text": bundle[0]},
+        ]}])
+
     def test_prompt_allowlist_anonymizes_questions_and_omits_paths_and_sample_ids(self):
         model_input = {
             "protocol": "must not be shown",

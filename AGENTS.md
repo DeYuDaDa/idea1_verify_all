@@ -60,6 +60,44 @@ unreviewed simulator observations.
 
 ### Suggestions that still need the actual images
 
+- Mechanism probes can use role-based third-party evidence cameras. Keep
+  geometry candidates in `view_planning.py` and native camera/mask handling in
+  `observation_views.py`; do not let incidental pickup-facing views stand in
+  for deliberate task views. Use actual positions/bounds and camera-specific
+  instance masks to screen framing. Complementary views from one event belong
+  to one capture group, not extra physical events. Camera changes are native
+  calls: record them separately, preserve pre-existing physics pauses, compare
+  task state before/after, and invalidate affected mechanism measurements if
+  the observation changes state. A pause does not establish an attribute clock.
+- For nested setup, consider final placement of outer containers before placing
+  their contents. Check each native containment edge and recheck after settling.
+  Bounded alternative objects/placement paths should retain actual identities,
+  reset boundaries and failed receipts; failed construction cannot refute the
+  intended propagation mechanism.
+
+- The user now prefers the reusable local web reviewer (`review_web/`,
+  `New-WebReview.ps1`, `web_review.md`) over opening Markdown review pages.
+  Default view: question, ordered model-visible images, and request text;
+  no action logs, coordinates, visible-object inventories or model predictions.
+  Reference answers belong in an optional collapsed audit area. Per-question
+  decisions and reasons must be exportable; protect existing review edits.
+  `New-MarkdownReview.ps1` remains an optional legacy export. Review packaging is
+  an audit deliverable, not an additional simulator run or approval gate.
+  Use non-Git output directories. Mechanism-only probes have no model request or
+  formal questions. Old request reconstructions must be labeled as such, never
+  as historical verbatim input. Read current runner/source evidence when the
+  model interface changes; do not assume every future batch keeps this schema.
+  For mechanism-only runs, lack of a historical model request must not leave the
+  reviewer with unexplained pictures. Generate a concrete Chinese scene story,
+  planned versus executed steps, physical question drafts, observed reference
+  answers (or explicit incomplete measurement), and a purpose for every capture.
+  Keep raw JSON/actions at the bottom. Never use a generic F-category title as
+  the scenario description, and never replace missing results with design
+  expectations. Separate native-mechanism verification from visual answerability.
+  `Update-WebReviewScenes.ps1` enriches an existing site without changing source
+  records; the expanded review has a separate namespace so old screenshot-only
+  approvals are preserved rather than silently reused as full question approval.
+
 - Check that the relevant face and state are visible, not just the object:
   a laptop back does not show a screen, and a device exterior may hide contents.
   Small distant cups/bowls and reflective liquids may be ambiguous.

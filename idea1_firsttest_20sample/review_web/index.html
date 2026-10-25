@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>图片题目审核</title><link rel="stylesheet" href="review.css">
+</head>
+<body>
+<header class="appbar">
+  <strong>图片题目审核</strong>
+  <label class="batch-label">批次 <select id="batch" aria-label="选择批次"></select></label>
+  <label class="file-button">打开数据文件夹<input id="folder" type="file" webkitdirectory multiple></label>
+  <button id="export">导出审核结果</button>
+  <label class="file-button secondary">恢复审核<input id="restore" type="file" accept=".json,application/json"></label>
+  <span id="save-state" role="status">未加载批次</span>
+</header>
+<div id="notice" role="alert" hidden></div>
+<div class="workspace">
+  <aside>
+    <input id="search" type="search" placeholder="搜索题号或问题" aria-label="搜索题号或问题">
+    <select id="filter" aria-label="筛选审核状态"><option value="all">全部</option><option value="pending">未审核</option><option value="reject">不通过</option><option value="pass">通过</option></select>
+    <p id="progress"></p><nav id="items" aria-label="题目列表"></nav>
+    <details class="help"><summary>使用说明</summary><p>先看模型能获得的证据，判断问题是否有唯一、可推出的答案。不通过时选择或填写原因。参考答案默认隐藏；模型预测不显示。</p><p>键盘：Alt + ← / → 切题；Alt + 1 通过；Alt + 2 不通过。输入原因时不会触发切题快捷键。</p><p>审核自动存于当前浏览器；建议结束时导出 JSON。换电脑、浏览器或移动网页后，可用“恢复审核”导入。</p></details>
+  </aside>
+  <main id="main">
+    <div id="empty"><h1>打开一个批次，逐题查看图片与输入</h1><p>选择含 data/input 和 data/media 的数据文件夹，或含 observations/attempts 的机制探测文件夹。文件只在本机浏览器中读取，不上传。</p></div>
+    <article id="detail" hidden>
+      <div class="item-heading"><div><span id="item-id"></span><h1 id="question"></h1><p id="question-extra"></p></div><div class="pager"><button id="prev" aria-label="上一题">← 上一题</button><button id="next" aria-label="下一题">下一题 →</button></div></div>
+      <p id="boundary" class="boundary"></p>
+      <section id="scenario" class="scenario" hidden>
+        <h2>这条记录做了什么</h2><p id="scene-initial"></p><ol id="scene-steps"></ol>
+        <p id="scene-purpose" class="scene-purpose"></p>
+        <h2>准备让模型回答</h2><div id="scene-questions"></div>
+        <details id="scene-answers"><summary>本次记录支持的参考答案</summary><div id="scene-answer-content"></div></details>
+        <div class="look-for"><strong>看图时重点检查</strong><ul id="scene-visual"></ul></div>
+      </section>
+      <section aria-label="图片"><div class="section-title"><h2 id="image-title">模型看到的图片</h2><span id="image-count"></span></div><div id="images" class="images"></div></section>
+      <details id="prompt-panel" open><summary id="prompt-title">模型输入</summary><p id="prompt-note"></p><pre id="prompt"></pre></details>
+      <details id="reference-panel"><summary>核对参考答案（不属于模型输入）</summary><div id="reference"></div></details>
+      <section class="decision" aria-label="审核意见">
+        <div class="decision-head"><strong id="decision-title">这题是否可用？</strong><div class="status-buttons"><button id="pending">未审核</button><button id="pass">通过</button><button id="reject">不通过</button></div><span id="decision-status" role="status"></span></div>
+        <div id="reasons" class="reasons"></div>
+        <label for="reason" class="reason-label">原因 / 备注</label><textarea id="reason" rows="2" placeholder="例如：第 2 张图看不到杯口，无法判断杯里是否有水。"></textarea>
+        <p id="decision-hint"></p>
+      </section>
+      <details id="raw-panel" hidden><summary>原始记录与设计依据（需要追查时再看）</summary><p id="raw-note"></p><ul id="raw-links"></ul><details><summary>本页的结构化说明</summary><pre id="raw-presentation"></pre></details></details>
+    </article>
+  </main>
+</div>
+<dialog id="lightbox"><form method="dialog"><button aria-label="关闭大图">关闭（Esc）</button></form><p id="lightbox-label"></p><div><img id="large-image" alt="原图"></div></dialog>
+<script src="batches.js"></script><script src="review.js"></script>
+</body></html>

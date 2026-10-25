@@ -14,16 +14,18 @@ export DATA_ROOT
 probe_selection=("$@")
 while (($#)); do
   case "$1" in
-    --facts|--cases|--scenes|--max-scenes|--sample-steps|--seed)
+    --facts|--cases|--scenes|--max-scenes|--sample-steps|--seed|--view-mode)
       (($# >= 2)) || die "$1 requires a value."
       shift 2 ;;
-    *) die "Allowed options: --facts, --cases, --scenes, --max-scenes, --sample-steps, --seed (each with a value)." ;;
+    *) die "Allowed options: --facts, --cases, --scenes, --max-scenes, --sample-steps, --seed, --view-mode (each with a value)." ;;
   esac
 done
 
 # Only new mechanism contract tests. No stage-30 pipeline or model env is used.
-run_python -m compileall -q mechanism_probe.py mechanism_probe_common.py mechanism_probes_thermal_liquid.py mechanism_probes_relations.py
-run_python -m unittest discover -s tests -p 'test_mechanism*.py' -v
+run_python -m compileall -q mechanism_probe.py mechanism_probe_common.py mechanism_probes_thermal_liquid.py mechanism_probes_relations.py view_planning.py observation_views.py nested_setup.py
+for pattern in 'test_mechanism*.py' 'test_view_planning.py' 'test_observation_views.py' 'test_nested_setup.py'; do
+  run_python -m unittest discover -s tests -p "$pattern" -v
+done
 run_python "${PROJECT_DIR%/}/mechanism_probe.py" --list "${probe_selection[@]}"
 run_python "${PROJECT_DIR%/}/linux_server_operation/13_thor_build.py" --check-cache --data-root "$DATA_ROOT"
 
@@ -49,6 +51,8 @@ archive_path, probe_root, project, log = map(Path, sys.argv[1:])
 names = ("mechanism_probe.py", "mechanism_probe_common.py", "mechanism_probes_thermal_liquid.py",
          "mechanism_probes_relations.py", "runtime.py", "interactions.py", "frame_evidence.py",
          "hard_group_plan.json", "困难组设计与机制依赖.md", "config.json",
+         "view_planning.py", "observation_views.py", "nested_setup.py",
+         "tests/test_view_planning.py", "tests/test_observation_views.py", "tests/test_nested_setup.py",
          "linux_server_operation/31_probe_native_mechanisms.sh")
 with zipfile.ZipFile(archive_path, "x", zipfile.ZIP_DEFLATED) as bundle:
     for path in sorted(probe_root.rglob("*")):

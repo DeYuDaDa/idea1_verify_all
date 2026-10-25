@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mechanism_probe_common import ProbeCase, ProbeUnavailable
+from mechanism_probe_common import ProbeCase, ProbeUnavailable, native_temperature
 
 
 def _bind(ctx: Any, alias: str, object_type: str, *, capability: str | None = None,
@@ -173,9 +173,9 @@ def _f1_run(order: str):
                          "Bread": ("ObjectTemperature", "isCooked")})
         before_obj = next((o for o in pre.get("metadata", {}).get("objects", [])
                            if o.get("objectId") == ctx.obj("Bread")["objectId"]), {})
-        before = {"temperature": before_obj.get("ObjectTemperature"), "isCooked": before_obj.get("isCooked")}
+        before = {"ObjectTemperature": native_temperature(before_obj), "isCooked": before_obj.get("isCooked")}
         current = after["latest"]["Bread"]
-        effect = (current.get("ObjectTemperature") not in (None, before["temperature"]) or
+        effect = (current.get("ObjectTemperature") not in (None, before["ObjectTemperature"]) or
                   current.get("isCooked") is True and before.get("isCooked") is not True)
         complete = (event.get("success") and event.get("following_toggle", {"success": True}).get("success")
                     and event.get("following_put_event", {"success": True}).get("success"))
@@ -237,7 +237,7 @@ def _f1_microwave(order: str):
         pre_obj = next((o for o in pre["metadata"].get("objects", []) if o.get("objectId") == potato_id), {})
         final = after["latest"]["Potato"]
         effect = (final.get("temperature") is not None and
-                  (final.get("temperature") != pre_obj.get("ObjectTemperature") or
+                  (final.get("temperature") != native_temperature(pre_obj) or
                   final.get("isCooked") is True and pre_obj.get("isCooked") is not True)
                   )
         complete = all(row.get("success") for row in actions.values() if not row.get("skipped")) and not any(
@@ -869,13 +869,26 @@ def _f5(dirty: bool, filled: bool, water_on: bool):
                                     "isDirty": expected_dirty, "isFilledWithLiquid": expected_filled,
                                     "fillLiquid": expected_liquid}, "final": final})
         supported = actions_succeeded and relation_check["passed"] and state_check["passed"]
-        status = "observed_supported" if supported else ("observed_counterexample" if actions_succeeded and relation_after else "inconclusive")
+        if supported:
+            status = "observed_supported"
+        elif water_on:
+            # Sink membership and source-on do not establish actual water
+            # contact. Retain the no-effect observation without claiming a
+            # successful-contact mechanism counterexample.
+            status = "inconclusive"
+        else:
+            status = "observed_counterexample" if actions_succeeded and relation_after else "inconclusive"
+        newly_cleaned = initial.get("isDirty") is True and final.get("isDirty") is False
+        newly_filled = initial.get("isFilledWithLiquid") is False and final.get("isFilledWithLiquid") is True
         return {"status": status, "fact_id": "F5", "family": "water",
                 "condition": {"initially_dirty": dirty, "initially_filled_with_water": filled,
                               "water_source_on": water_on},
                 "initial_state": initial, "pre_event_snapshot": pre,
                 "source_action": flow, "after_source_before_contact": after_source,
                 "contact_event": put, "after": after,
+                "actual_contact_independently_verified": False,
+                "native_effect_witness": {"newly_cleaned": newly_cleaned, "newly_filled": newly_filled},
+                "no_effect_interpretation": "contact_or_activation_order_unverified" if water_on and not supported else None,
                 "expected_final_state": {"isDirty": expected_dirty, "isFilledWithLiquid": expected_filled,
                                          "fillLiquid": expected_liquid},
                 "interpretation": "Each active cell has a paired faucet-off placement control; all four dirt/liquid initial states are repeated under both source conditions."}
