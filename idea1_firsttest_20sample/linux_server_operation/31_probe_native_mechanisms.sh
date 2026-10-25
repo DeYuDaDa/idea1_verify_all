@@ -57,6 +57,7 @@ names = ("mechanism_probe.py", "mechanism_probe_common.py", "mechanism_probes_th
          "hard_group_plan.json", "困难组设计与机制依赖.md", "config.json",
          "view_planning.py", "observation_views.py", "nested_setup.py",
          "tests/test_view_planning.py", "tests/test_observation_views.py", "tests/test_nested_setup.py",
+         "tests/test_mechanism_common.py", "tests/test_mechanism_registry.py",
          "linux_server_operation/31_probe_native_mechanisms.sh")
 with zipfile.ZipFile(archive_path, "x", zipfile.ZIP_DEFLATED) as bundle:
     for path in sorted(probe_root.rglob("*")):

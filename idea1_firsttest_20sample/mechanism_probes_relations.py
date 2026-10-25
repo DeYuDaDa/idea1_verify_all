@@ -531,6 +531,7 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
                 },
                 edges=(("outer", "support"), ("inner", "outer"), ("content", "inner")))
             ctx.bind("source", ctx.roles["outer"])
+            _snapshot(ctx, "nested_chain_before_pickup")
             content_before_event = ctx.obj("content")
             inner_before_event = ctx.obj("inner")
             relative_before = _vector_delta(ctx.obj("inner").get("position"),
@@ -609,8 +610,10 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
             if initial is None:
                 raise ProbeUnavailable("F10 nested heat candidate lacks ObjectTemperature metadata")
             steps.append(_step(ctx, "microwave_on", "ToggleObjectOn", objectId=ctx.roles["source"], forceAction=True))
-            for i in range(36):
-                steps.append(_step(ctx, f"heat_observe_{i+1:02d}", "Pass"))
+            # Keep the 36 native Pass calls; choose images through the shared
+            # sampling policy instead of saving one for every observation step.
+            trajectory = ctx.observe(steps=tuple(sorted({0, 36} | {
+                n for n in ctx.sample_steps if n <= 36})), total_steps=36)
             final = ctx.field("content", "temperature")
             changed = final != initial
             nested_relation_preserved = (ctx.roles["inner"] in _parents(ctx.obj("content")) and
@@ -624,6 +627,7 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
             return _base(case_id, "F10", "nested_heat",
                          "observed_supported" if changed and nested_relation_preserved else "inconclusive",
                          checks=checks, steps=steps, initial_temperature=initial, final_temperature=final,
+                         trajectory=trajectory, observation_passes=36,
                          setup_search=setup,
                          construction_plan=setup,
                          interpretation={"only_nested_heating_was_tested": True,
@@ -646,9 +650,10 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
             ctx.require(ctx.obj("content").get("isDirty") is True,
                         "Native set-dirty action did not establish the wash precondition")
         initial = ctx.obj("content").get("isDirty")
+        _snapshot(ctx, "nested_dirty_chain_before_water_on")
         steps.append(_step(ctx, "faucet_on", "ToggleObjectOn", objectId=ctx.roles["source"], forceAction=True))
-        for i in range(36):
-            steps.append(_step(ctx, f"wash_observe_{i+1:02d}", "Pass"))
+        trajectory = ctx.observe(steps=tuple(sorted({0, 36} | {
+            n for n in ctx.sample_steps if n <= 36})), total_steps=36)
         final = ctx.obj("content").get("isDirty")
         changed = initial is True and final is False
         nested_relation_preserved = (ctx.roles["inner"] in _parents(ctx.obj("content")) and
@@ -662,6 +667,7 @@ def _f10(kind: str) -> Callable[[Any], dict[str, Any]]:
         return _base(case_id, "F10", "nested_wash",
                      "observed_supported" if changed and nested_relation_preserved else "inconclusive",
                      checks=checks, steps=steps, setup_search=setup,
+                     trajectory=trajectory, observation_passes=36,
                      construction_plan=setup,
                      initial_isDirty=initial, final_isDirty=final,
                      interpretation={"basin_relation_alone_is_not_water_contact_evidence": True,

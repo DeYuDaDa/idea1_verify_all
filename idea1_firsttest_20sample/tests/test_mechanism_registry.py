@@ -7,6 +7,17 @@ from mechanism_probe import FACTS, FAMILY_SCENES, registry, summarise
 
 
 class RegistryTests(unittest.TestCase):
+    def test_capture_failure_is_reported_separately_from_completed_probe_loop(self):
+        case = registry()[0]
+        row = {"fact_id": case.fact_id, "case_id": case.case_id, "scene": "FloorPlan1",
+               "status": "inconclusive", "visual_capture_status": "capture_incomplete",
+               "native_measurement_valid": False}
+        report = summarise([row], [case], {})
+        self.assertEqual(report["capture_failure_attempts"], 1)
+        self.assertEqual(report["invalid_native_measurements"], 1)
+        self.assertTrue(report["has_capture_or_measurement_failure"])
+        self.assertEqual(report["status_counts"], {"inconclusive": 1})
+
     def test_every_registered_experiment_has_a_real_scene_family(self):
         config = json.loads((Path(__file__).resolve().parents[1] / "config.json").read_text())
         cases = registry()

@@ -97,6 +97,15 @@ unreviewed simulator observations.
   `Update-WebReviewScenes.ps1` enriches an existing site without changing source
   records; the expanded review has a separate namespace so old screenshot-only
   approvals are preserved rather than silently reused as full question approval.
+  When source media is incomplete, state that directly before discussing viewer
+  compatibility. Distinguish native capture failure/disabled observation,
+  metadata-only snapshots, named-but-missing files, and incompatible paths.
+  Do not attach orphan PNGs discarded by observation-state checks as evidence.
+  Inspect `native_measurement_valid` separately: existing PNG bytes cannot rescue
+  an observation-contaminated mechanism measurement. Export diagnostic pages
+  with explicit failure reasons and preserve originals; do not call such a
+  batch complete. Future camera records should carry `image_requested` so
+  metadata-only captures do not require label-based inference.
 
 - Check that the relevant face and state are visible, not just the object:
   a laptop back does not show a screen, and a device exterior may hide contents.

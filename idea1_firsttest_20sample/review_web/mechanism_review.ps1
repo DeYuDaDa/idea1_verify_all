@@ -9,18 +9,40 @@ function RV-ViewName([string]$Purpose){
     $names=@{joint_relation='关系总览';device_detail='设备近景';contents_detail='内容物近景';fixture_detail='水槽与水源近景';device_contents_relation='设备与内容物';interior_contents_detail='内部物体近景';burners_pots_knob_relation='炉头与容器关系';control_detail='旋钮近景';burner_vessel_detail='炉头与器皿';carried_relation='承载关系';carried_item_detail='被承载物近景';nested_relation='嵌套关系';inner_contents_detail='内层容器与内容物';device_local='设备局部';contents_local='内容物局部';toaster_detail='烤面包机近景';bread_detail='面包片近景'}
     if($names.ContainsKey($Purpose)){return $names[$Purpose]};return $Purpose
 }
-function RV-ExpandCaptureViews($Captures){
+function RV-LegacyMetadataOnlyReset([string]$SourceRoot){
+    $file=Join-Path $SourceRoot 'source/nested_setup.py'
+    if(-not(Test-Path -LiteralPath $file -PathType Leaf)){return $false}
+    $text=Get-Content -LiteralPath $file -Raw -Encoding UTF8
+    return $text.Contains('ctx.capture(f"nested_setup_trial_{trial:02d}_scene_reset", image=False)')
+}
+function RV-ExpandCaptureViews($Captures,[bool]$LegacyMetadataOnlyReset=$false){
     $expanded=[Collections.Generic.List[object]]::new()
     foreach($capture in @($Captures)){
-        $views=@(RV-Get $capture 'view_frames' @())
-        if(-not $views.Count){$expanded.Add($capture);continue}
+        if($capture -isnot [Collections.IDictionary]){throw 'Unsupported capture_index entry: expected a JSON object.'}
+        if($capture.Contains('image_requested') -and (RV-Get $capture 'image_requested') -eq $false){continue}
+        if($LegacyMetadataOnlyReset -and -not $capture.Contains('image_requested') -and
+           [string](RV-Get $capture 'label' '') -match '^nested_setup_trial_\d+_scene_reset$' -and
+           -not (RV-Get $capture 'rgb_path') -and -not (RV-Get $capture 'view_frames') -and -not (RV-Get $capture 'capture_error')){continue}
+        # Inspect the stored array directly. A helper return would enumerate a
+        # single-element array into one dictionary in PowerShell.
+        $rawViews=@();if($capture.Contains('view_frames')){$rawViews=$capture['view_frames']}
+        if($null -ne $rawViews -and $rawViews -isnot [Array]){throw 'Unsupported view_frames schema: expected a JSON array.'}
+        $views=@();if($null -ne $rawViews){$views=$rawViews}
+        if(-not $views.Count){
+            $single=[ordered]@{};foreach($key in $capture.Keys){$single[$key]=$capture[$key]}
+            $single['capture_group_index']=RV-Get $capture 'capture_group_index' (RV-Get $capture 'capture_index' $expanded.Count)
+            $single['capture_index']=$expanded.Count
+            $expanded.Add($single);continue
+        }
         $vi=0
         foreach($view in $views){
+            if($view -isnot [Collections.IDictionary]){throw 'Unsupported view_frames entry: expected a JSON object.'}
             $row=[ordered]@{};foreach($key in $capture.Keys){if($key -ne 'view_frames'){$row[$key]=$capture[$key]}}
             $row['capture_group_index']=RV-Get $capture 'capture_index' 0
             $row['capture_index']=$expanded.Count
             $row['rgb_path']=RV-Get $view 'rgb_path' ''
             $row['view_purpose']=RV-Get $view 'purpose' ''
+            $row['view_png_sha256']=RV-Get $view 'png_sha256' ''
             $row['view_number']=++$vi;$row['view_count']=$views.Count
             $expanded.Add($row)
         }
@@ -55,19 +77,20 @@ function RV-RefineScene($Context,$P) {
         $device=if($coffee){'咖啡机'}elseif($micro){'微波炉'}else{'烤面包机'};$target=if($coffee){'带柄杯'}elseif($micro){'土豆'}else{'面包片'}
         $P.title=if($firstIn){"先放入$target，再开启$device"}else{"先开启$device，再放入$target"}
         $P.initial="使用同一台$device 和一个$target，从设备关闭、目标在设备外开始。$(if($coffee){'杯子先倒空。'}elseif($micro){'土豆先准备为未熟状态。'}else{'从场景原有面包切出一片，准备为未熟状态。'})"
-        $P.steps=if($firstIn){@("把$target 放入关闭的$device。",$(if($micro){'关上炉门，然后启动微波炉。'}else{"开启$device。"}),'在动作后立即以及后续观察点分别保存图像与状态；重复截图不代表又发生了事件。')}else{@("先启动$device。",$(if($micro){'再尝试开门放土豆；实际开门被拒绝，因为设备必须先关闭。后续放入和关门都跳过。'}else{"再把$target 放入这台已开启的设备。"}),'保存后续观察与末态；用来核对该顺序下实际发生的结果。')}
-        if($micro -and -not $firstIn){$P.title+='（开门被拒绝）';$seen.Add('启动成功，但开门被设备规则拒绝；土豆未按计划放进去。这不是成功放入之后不加热的反例。')}
+        $P.steps=if($firstIn){@("把$target 放入关闭的$device。",$(if($micro){'关上炉门，然后启动微波炉。'}else{"开启$device。"}),'在动作后立即以及后续观察点分别保存图像与状态；重复截图不代表又发生了事件。')}else{@("先启动$device。",$(if($micro){'再尝试开门并放入土豆；是否成功以本条动作回执为准。'}else{"再把$target 放入这台已开启的设备。"}),'保存后续观察与末态；用来核对本条实际发生的结果。')}
+        $ordered=@(RV-FindChecks $r '^ordered_native_actions_succeeded$');$orderedOk=$ordered.Count -gt 0 -and (RV-Get $ordered[0] 'passed' $false) -eq $true
+        if($micro -and -not $firstIn -and -not $orderedOk){$seen.Add('本条有序动作检查未通过；请以本条动作回执和错误字段为准，不能沿用其他运行中的开门结论。')}
         $latest=RV-Get (RV-Get $o 'after' @{}) 'latest' @{};$role=if($coffee){'Mug'}elseif($micro){'Potato'}else{'Bread'};$state=RV-Get $latest $role @{}
-        if($coffee){$filled=RV-Get $state 'isFilledWithLiquid';$liquid=RV-Get $state 'fillLiquid';$answer=if($null -eq $filled){'没有取得末态。'}elseif($filled){"杯子有液体，类型为$(if($liquid -eq 'coffee'){'咖啡'}elseif($liquid -eq 'water'){'水'}else{$liquid})。"}else{'杯子为空。'};$qs.Add(@{id='liquid';text='最后杯子是空的，还是有液体？如果有，是什么液体？';answer_text=$answer;answer_basis='本条最后一次杯子液体状态记录。';answer_status=if($null -ne $filled){'observed'}else{'undetermined'}})}
-        else{$cooked=RV-Get $state 'isCooked';$answer=if($null -eq $cooked){'没有取得末态。'}elseif($cooked){"$target 最后已熟。"}else{"$target 最后未熟。"};$qs.Add(@{id='cooked';text="最后$target 熟了没有？";answer_text=$answer;answer_basis='本条最后一次熟度记录，不由图片存在性推断。';answer_status=if($null -ne $cooked){'observed'}else{'undetermined'}});if(-not $micro){$seen.Add('烤面包机温度读取存在别名问题，熟度记录可用，空温度值不能说明没有受热。')}}
+        if($coffee){$filled=RV-Get $state 'isFilledWithLiquid';$liquid=RV-Get $state 'fillLiquid';$answer=if($null -eq $filled){'没有取得末态液体测量。'}elseif($filled){"杯子有液体，类型为$(if($liquid -eq 'coffee'){'咖啡'}elseif($liquid -eq 'water'){'水'}else{$liquid})。"}else{'杯子为空。'};$fillCheck=@(RV-FindChecks $r '^coffee_fill_observed$');$measured=$null -ne $filled -and $orderedOk -and $fillCheck.Count -gt 0 -and (RV-Get $fillCheck[0] 'passed' $false);$qs.Add(@{id='liquid';text='最后杯子是空的，还是有液体？如果有，是什么液体？';answer_text=$answer;answer_basis='本条最后一次杯子液体状态和咖啡机制检查。';answer_status=if($measured){'observed'}else{'undetermined'}})}
+        else{$cooked=RV-Get $state 'isCooked';$answer=if($null -eq $cooked){'没有取得末态熟度测量。'}elseif($cooked){"$target 最后已熟。"}else{"$target 最后未熟。"};$measured=$null -ne $cooked -and $orderedOk;$qs.Add(@{id='cooked';text="最后$target 熟了没有？";answer_text=$answer;answer_basis='仅使用本条目标对象的末态熟度字段，并核对有序动作检查。';answer_status=if($measured){'observed'}else{'undetermined'}});if($null -eq $cooked){$seen.Add('本条没有目标熟度末态字段；不能把缺失值解释成未熟或未受热。')}}
         $seen.Add($answer);$P.purpose='确认这一设备在本条动作顺序下能否产生目标效果；另一种顺序是另一条独立记录。两种顺序都有效，不等于顺序造成了差异。'
         $P.draft_context=$P.initial+"`n实际操作："+($P.steps -join ' ')
     }elseif($fact -eq 'F2'){
         $sink=$case -match 'sink';$scan=$case -match 'scan';$outside=$case -match 'outside'
         $P.title=if($sink){'移动碗到水槽中心和边缘候选位置，寻找流水作用边界'}elseif($scan){'土豆放在微波炉中心和边缘，核对包含与受热边界'}elseif($outside){'土豆留在炉外，启动微波炉后是否保持原状态'}else{'土豆放进炉内，启动微波炉后是否受热'}
         $P.initial=if($sink){'计划使用同一只碗、水龙头和水槽盆，比较几个候选摆位下的真实关系与注水效果。'}else{'计划使用一颗未熟、室温的土豆和微波炉，比较炉内、炉外或边缘摆位的关系与受热效果。'}
-        $P.steps=if($scan){@('按容器几何信息提出中心、边缘等候选位置。','逐点尝试摆放；只有摆放成功并核实关系后，才进入该位置的干预。','本次没有形成可用的位置—关系—效果对照，图像主要记录搭建场景与停止时点。')}else{@('先核验室温土豆初态，再计划安排炉内或炉外位置。','本次温度取值字段与原生字段不匹配，初态核验便停止。','原计划的启动微波炉与受热比较没有完成。')}
-        $qs.Add(@{id='effect';text=if($sink){'本条位置与水源条件下，碗最后装水了吗、变干净了吗？'}else{'本条摆位下启动微波炉，土豆最后受热或变熟了吗？'};answer_text='没有完成对应干预与测量，尚无可计分的标准答案。';answer_basis='实际停止点；不能用设计预期补写未发生的过程。';answer_status='undetermined'})
+        $P.steps=if($scan){@('按容器几何信息提出中心、边缘等候选位置。','逐点尝试摆放；只有摆放成功并核实关系后，才进入该位置的干预。','本次没有形成可用的位置—关系—效果对照，图像主要记录搭建场景与停止时点。')}else{@('先查看本条土豆初态与温度字段。','再按本条 placement、动作回执和相关检查判断微波炉干预是否发生。','没有取得干预后的温度或熟度时，保留为未测量，不把其它运行的字段问题带入本条。')}
+        $qs.Add(@{id='effect';text=if($sink){'本条位置与水源条件下，碗最后装水了吗、变干净了吗？'}else{'本条摆位下启动微波炉，土豆最后受热或变熟了吗？'};answer_text='没有从本条找到可支持该答案的完整干预和末态测量。';answer_basis='本条实际 trial、动作、检查与末态字段；不能用设计预期或旧运行结论补写。';answer_status='undetermined'})
         $seen.Add('作用边界尚未测出；不支持也不反驳包含关系足够这一猜测。');$P.draft_context=$P.initial+"`n本次尝试："+($P.steps -join ' ')
         $measured=@(@(RV-Get $o 'trials' @())|Where-Object{[string](RV-Get $_ 'setup_status' '') -eq 'measured'})
         if($measured.Count){
@@ -94,8 +117,9 @@ function RV-RefineScene($Context,$P) {
     }elseif($fact -eq 'F4'){
         $uncooked=$case -match 'uncooked';$P.title=if($uncooked){'未熟土豆加热后撤离热源，检查温度回落与熟度'}else{'已熟土豆重新加热再冷却，检查熟度是否保留'}
         $P.initial="原计划使用一颗$(if($uncooked){'未熟'}else{'已熟'})、室温的土豆和一台微波炉，分开记录温度与熟度。"
-        $P.steps=@('先准备并核验土豆的室温和熟度初态。','本次因为探针温度字段与原生字段不匹配，在初态核验就停止。','原计划的加热、移出热源、等待冷却均没有完成；不能把当前几张图看作完整热—冷序列。')
-        $seen.Add('没有完成热—冷轨迹，因此不能判断熟度保留是否成立。');$qs.Add(@{id='cooling';text='土豆加热并撤离热源后，最后温度和熟度分别是什么？';answer_text='该阶段没有执行，尚无可计分标准答案。';answer_basis='实际停止于初态检查。';answer_status='undetermined'});$P.draft_context=$P.initial+"`n本次尝试："+($P.steps -join ' ')
+        $tempChecks=@(RV-FindChecks $r 'temperature|cook|cool');$obsTemp=RV-Get $o 'final_temperature' $null
+        $P.steps=@('按本条初态字段与检查记录核实准备情况。',$(if($tempChecks.Count -or $null -ne $obsTemp){'本条存在温度或熟度相关字段；按实际值与检查状态呈现。'}else{'本条没有温度/熟度测量，不能沿用其他运行的字段错误结论。'}),'只有记录显示加热、移出和等待步骤确已发生时，才将其解释为热—冷序列。')
+        $seen.Add($(if($tempChecks.Count -or $null -ne $obsTemp){'本条保留温度/熟度证据，需核对相应检查。'}else{'没有取得温度/熟度测量，热—冷轨迹无法判定。'}));$qs.Add(@{id='cooling';text='本条记录中土豆温度和熟度如何变化？';answer_text=if($tempChecks.Count -or $null -ne $obsTemp){'有相关字段；请结合本条实际值和检查状态核对。'}else{'没有取得对应测量，尚无标准答案。'};answer_basis='本条 observation 与检查；不引用其他运行的字段错误结论。';answer_status='undetermined'});$P.draft_context=$P.initial+"`n本次记录："+($P.steps -join ' ')
     }elseif($fact -eq 'F5'){
         $cond=RV-Get $o 'condition' @{};$dirty=RV-Get $cond 'initially_dirty' ($case -match 'dirty');$filled=RV-Get $cond 'initially_filled_with_water' ($case -match 'filled');$on=RV-Get $cond 'water_source_on' ($case -match 'water_on$')
         $P.title="$(if($dirty){'脏'}else{'干净'})$(if($filled){'且已有水'}else{'且空'})的碗，放进水槽（水龙头$(if($on){'开启'}else{'关闭'})）"
@@ -164,8 +188,9 @@ function RV-RefineScene($Context,$P) {
         $P.visual_requirements=@('需要在干预前分别看清外层容器、内层容器与最内物品的两级关系，不能只拍到最外层。','干预后还需看清目标位置或属性的证据；本次未执行的动作不能靠当前截图补出来。')
     }
     if($fact -eq 'F11'){
-        $P.title='同一水壶由两个炉头共同加热，再撤掉一个热源（共同位置未建成）'
-        $qs.Add(@{id='remaining_source';text='两个热源原先共同加热同一水壶；关闭其中一个后，另一个热源能否让水壶继续保持热状态？';answer_text='本次没有建立经验证的共同受热位置，也没有执行完整的单源/双源及撤源比较，尚无标准答案。';answer_basis='实际未进入所需多来源干预；不能把摆放/几何失败当作替代支持机制的反例。';answer_status='undetermined'})
+        $setupChecks=@(RV-FindChecks $r '^dual_source|common|nested_setup');$setupPassed=@($setupChecks|Where-Object{(RV-Get $_ 'passed' $false) -eq $true}).Count -gt 0;$eventSteps=@(RV-Get $o 'steps' @());$hasRemoval=@($eventSteps|Where-Object{[string](RV-Get $_ 'label' '') -match 'off|remove|toggle'}).Count -gt 0
+        $P.title=if($setupPassed){'核对共同热源布置与撤源后的水壶状态'}else{'尝试构建同一水壶的双热源条件'}
+        $qs.Add(@{id='remaining_source';text='本条记录建立了哪些热源布置，执行了哪些撤源步骤？';answer_text=if($setupPassed -and $hasRemoval){'本条有共同布置及撤源记录；答案应以实际末态测量和检查为准。'}elseif(-not $setupPassed){'本条没有通过共同布置检查，无法回答撤源后的热状态。'}else{'本条未记录完整撤源步骤或测量，尚无标准答案。'};answer_basis='本条布置检查、动作步骤和实测字段。';answer_status='undetermined'})
         $P.visual_requirements=@('需要看清水壶与两个炉头的共同作用位置，并能区分哪个来源开启或关闭。','单源、双源和逐一撤源是不同对照分支；还要排除只是短期余热保留。当前图片没有替代这些未执行的干预。')
     }
     if($fact -eq 'F9'){
@@ -245,6 +270,7 @@ function Get-MechanismReviewPresentation($Result,$Captures,$Segments) {
     foreach($q in @($presentation.questions)){$n++;$questionLines.Add("$n. $([string](RV-Get $q 'text' ''))")}
     $presentation['draft_prompt']="你将看到同一探测记录按顺序保存的 $(@($Captures).Count) 张图片。不同独立重置分支不是同一世界的连续历史。`n`n以下初始条件与操作过程是随题提供的信息，不要求你从 RGB 中猜测未声明的模拟器属性。`n$($presentation.draft_context)`n`n请结合文字与图片回答下面的问题；若给定证据不足，回答「无法确定」，不要假设尚未验证的物理规则。`n$($questionLines.ToArray() -join "`n")"
     if(-not $presentation.run_completed){$presentation['draft_warning']='本次构造未完成。以下是帮助审核的题意草案，尚不能作为完整、可计分的模型样本。'}else{$presentation['draft_warning']='这是根据本次过程新整理的候选输入，不是旧运行保存的 prompt；参考答案另列，未混入这段输入。'}
-    if($context.case_id -eq 'f1_microwave_activate_then_enter'){$presentation['draft_warning']='计划中的先启动再放入没有完成：运行中开门被拒绝。以下描述实际过程，不能用于验证成功放入后的加热效果。'}
+    $captureErrors=@($Captures|Where-Object{[string](RV-Get $_ 'capture_error' '') -or [string](RV-Get (RV-Get $_ 'camera_audit' @{}) 'error' '')})
+    if($captureErrors.Count){$presentation['draft_warning']+=' 图像采集不完整：部分预期视角失败或未提供图像；当前原生状态字段不能替代视觉可答性证据。'}
     return $presentation
 }

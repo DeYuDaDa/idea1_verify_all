@@ -29,6 +29,8 @@ INITIAL_TYPES = {
 STATE_FIELDS = ("temperature", "ObjectTemperature", "isCooked", "isDirty", "isFilledWithLiquid",
                 "fillLiquid", "isToggled", "isOpen", "isBroken", "isPickedUp",
                 "isMoving", "isSliced", "isUsedUp")
+DIAGNOSTIC_MAX_OBJECTS = 32
+DIAGNOSTIC_MAX_VALUE_CHARS = 160
 
 
 def world_state(metadata: dict) -> dict:
@@ -55,6 +57,70 @@ def changed_objects(before: dict, after: dict) -> list[str]:
             if before["objects"].get(key) != after["objects"].get(key)] + (
         ["agent_or_inventory"] if any(before[k] != after[k] for k in
          ("agent_position", "agent_rotation", "inventory")) else [])
+
+
+def _diagnostic_value(value):
+    """Return a compact, bounded representation for saved state-diff audits."""
+    if isinstance(value, dict):
+        value = {str(k): _diagnostic_value(v) for k, v in sorted(value.items())}
+    elif isinstance(value, (list, tuple)):
+        items = list(value)
+        value = [_diagnostic_value(v) for v in items[:16]]
+        if len(items) > 16:
+            value[-1] = "..."
+    elif not isinstance(value, (str, int, float, bool)) and value is not None:
+        value = repr(value)
+    if isinstance(value, str) and len(value) > DIAGNOSTIC_MAX_VALUE_CHARS:
+        return value[:DIAGNOSTIC_MAX_VALUE_CHARS - 3] + "..."
+    return value
+
+
+def state_diff_audit(before: dict, after: dict, target_roles: dict[str, str], *,
+                     phase: str, action: str, action_index: int | None,
+                     action_kwargs: dict | None = None) -> dict:
+    """Explain a world_state difference without changing guard semantics."""
+    roles_by_id = {}
+    for alias, object_id in target_roles.items():
+        roles_by_id.setdefault(object_id, []).append(alias)
+    changes = []
+    object_ids = sorted(set(before["objects"]) | set(after["objects"]))
+    for object_id in object_ids:
+        old = before["objects"].get(object_id)
+        new = after["objects"].get(object_id)
+        if old == new:
+            continue
+        if old is None:
+            status = "added"
+            fields = {key: {"before": "__MISSING__", "after": _diagnostic_value(value)}
+                      for key, value in new.items()}
+        elif new is None:
+            status = "removed"
+            fields = {key: {"before": _diagnostic_value(value), "after": "__MISSING__"}
+                      for key, value in old.items()}
+        else:
+            status = "changed"
+            fields = {key: {"before": _diagnostic_value(old.get(key, "__MISSING__")),
+                            "after": _diagnostic_value(new.get(key, "__MISSING__"))}
+                      for key in sorted(set(old) | set(new)) if old.get(key, "__MISSING__") != new.get(key, "__MISSING__")}
+        aliases = sorted(roles_by_id.get(object_id, []))
+        changes.append({"entity_type": "object", "object_id": object_id, "status": status,
+                        "selected_target_roles": aliases, "unrelated_object": not bool(aliases),
+                        "fields": fields})
+    for field in ("agent_position", "agent_rotation", "inventory"):
+        if before[field] != after[field]:
+            changes.append({"entity_type": "agent_or_inventory", "object_id": None,
+                            "status": "changed", "selected_target_roles": [],
+                            "unrelated_object": False,
+                            "fields": {field: {"before": _diagnostic_value(before[field]),
+                                               "after": _diagnostic_value(after[field])}}})
+    changed_ids = changed_objects(before, after)
+    return {"phase": phase, "action": action, "action_index": action_index,
+            "action_kwargs": _diagnostic_value(action_kwargs or {}),
+            "changed_entities": changed_ids[:DIAGNOSTIC_MAX_OBJECTS],
+            "changed_entity_key_count": len(changed_ids),
+            "changes": changes[:DIAGNOSTIC_MAX_OBJECTS],
+            "changed_entity_count": len(changes),
+            "truncated": len(changes) > DIAGNOSTIC_MAX_OBJECTS}
 
 
 def physics_is_paused(records: list[dict]) -> bool:
@@ -156,8 +222,42 @@ class EvidenceCameras:
         already_paused = physics_is_paused(self.session.records)
         pause_attempted = False
         changed = set()
+        state_checks = []
+        selected_target_roles = {alias: object_id for alias, object_id in roles.items()
+                                 if object_id in {obj.get("objectId") for obj in objects.values()}}
+        if not selected_target_roles:
+            selected_target_roles = {alias: obj["objectId"] for alias, obj in objects.items()
+                                     if "objectId" in obj}
 
-        def native(action, **kwargs):
+        def save_failure_evidence(result, phase):
+            # Private debugging artifacts are never copied into view_frames.
+            # Retain exact metadata and available images even when evidence
+            # approval fails, rather than returning only a list of object IDs.
+            try:
+                from runtime import ControllerSession
+                target = directory.parent / "diagnostics" / "observer" / stem
+                target.mkdir(parents=True, exist_ok=True)
+                for name, value in (("before.json", metadata), (f"{phase}_after.json", result.metadata)):
+                    path = target / name
+                    path.write_text(json.dumps(ControllerSession._jsonable(value),
+                                               ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                images = []
+                agent_frame = getattr(result.event, "frame", None)
+                if agent_frame is not None:
+                    images.append(("agent", agent_frame))
+                images.extend((f"third_party_{i}", frame) for i, frame in enumerate(
+                    getattr(result.event, "third_party_camera_frames", []) or []))
+                for name, frame in images:
+                    path = target / f"{phase}_{name}_diagnostic.png"
+                    Image.fromarray(frame).save(path, format="PNG")
+                    report.setdefault("diagnostic_frames", []).append({
+                        "path": str(path), "purpose": "observer_failure_debug_only",
+                        "approved_evidence": False})
+                report["diagnostic_metadata_directory"] = str(target)
+            except Exception as exc:
+                report.setdefault("diagnostic_save_errors", []).append(f"{type(exc).__name__}: {exc}")
+
+        def native(action, *, phase, **kwargs):
             try:
                 result = self.session.step(action, raise_on_failure=True, **kwargs)
             finally:
@@ -165,8 +265,17 @@ class EvidenceCameras:
                     self.session.records[-1]["observation_only"] = True
             if result.record.get("lastActionSuccess") is not True:
                 raise RuntimeError(f"Observer action did not succeed: {action}")
-            changed.update(changed_objects(baseline, world_state(result.metadata)))
+            after = world_state(result.metadata)
+            action_index = result.record.get("index")
+            if action_index is None and self.session.records:
+                action_index = self.session.records[-1].get("index", len(self.session.records) - 1)
+            check = state_diff_audit(baseline, after, selected_target_roles,
+                                     phase=phase, action=action, action_index=action_index,
+                                     action_kwargs=kwargs)
+            state_checks.append(check)
+            changed.update(changed_objects(baseline, after))
             if changed:
+                save_failure_evidence(result, phase)
                 raise RuntimeError("Observer intervention changed native task state")
             return result
 
@@ -174,7 +283,7 @@ class EvidenceCameras:
             if configure:
                 if not already_paused:
                     pause_attempted = True
-                    native("PausePhysicsAutoSim")
+                    native("PausePhysicsAutoSim", phase="pause")
                 selected = []
                 for slot, group in enumerate(groups):
                     targets = {a: objects[a]["objectId"] for a in group["roles"] if a in objects}
@@ -184,7 +293,7 @@ class EvidenceCameras:
                                   "fieldOfView": candidate["fov_degrees"], "nearClippingPlane": 0.03,
                                   "farClippingPlane": 20.0}
                         if slot >= len(self._ids):
-                            result = native("AddThirdPartyCamera", **kwargs)
+                            result = native("AddThirdPartyCamera", phase="add_camera_candidate", **kwargs)
                             cameras = result.metadata.get("thirdPartyCameras") or []
                             camera_id = int(cameras[-1]["thirdPartyCameraId"]) if cameras else len(
                                 getattr(result.event, "third_party_camera_frames", [])) - 1
@@ -192,7 +301,8 @@ class EvidenceCameras:
                                 raise RuntimeError("Added camera produced no indexed third-party frame")
                             self._ids.append(camera_id)
                         else:
-                            result = native("UpdateThirdPartyCamera", thirdPartyCameraId=self._ids[slot], **kwargs)
+                            result = native("UpdateThirdPartyCamera", phase="update_camera_candidate",
+                                            thirdPartyCameraId=self._ids[slot], **kwargs)
                         presence = mask_presence(result.event, self._ids[slot], targets)
                         report["candidate_trials"].append({"view": group["purpose"],
                             "candidate": candidate, "rendered_presence": presence})
@@ -201,7 +311,8 @@ class EvidenceCameras:
                     if best is None:
                         continue
                     pose = best["candidate"]
-                    native("UpdateThirdPartyCamera", thirdPartyCameraId=self._ids[slot], position=pose["position"],
+                    native("UpdateThirdPartyCamera", phase="select_camera_pose",
+                           thirdPartyCameraId=self._ids[slot], position=pose["position"],
                            rotation=pose["rotationEuler"], fieldOfView=pose["fov_degrees"],
                            nearClippingPlane=0.03, farClippingPlane=20.0)
                     selected.append({"camera_id": self._ids[slot], "purpose": group["purpose"],
@@ -238,18 +349,53 @@ class EvidenceCameras:
                         self.session.records[-1]["observation_only"] = True
                     if result.record.get("lastActionSuccess") is not True:
                         raise RuntimeError("Unpause did not confirm success")
-                    changed.update(changed_objects(baseline, world_state(result.metadata)))
+                    after = world_state(result.metadata)
+                    action_index = result.record.get("index")
+                    if action_index is None and self.session.records:
+                        action_index = self.session.records[-1].get("index", len(self.session.records) - 1)
+                    check = state_diff_audit(baseline, after, selected_target_roles,
+                                             phase="unpause", action="UnpausePhysicsAutoSim",
+                                             action_index=action_index)
+                    state_checks.append(check)
+                    changed.update(changed_objects(baseline, after))
+                    if check["changed_entity_count"]:
+                        save_failure_evidence(result, "unpause")
                 except Exception as exc:
                     self.unhealthy = True
                     report["unpause_failed"] = True
                     report["restore_error"] = str(exc)
             report["world_state_changed"] = bool(changed)
             report["changed_objects"] = sorted(changed)
+            first_changed = next((check for check in state_checks if check["changed_entity_count"]), None)
+            report["state_diff_audit"] = {
+                "schema_version": 1,
+                "baseline": "metadata passed to capture before observation actions",
+                "selected_target_roles": selected_target_roles,
+                "first_changed_action": ({"phase": first_changed["phase"],
+                                           "action": first_changed["action"],
+                                           "action_index": first_changed["action_index"]}
+                                          if first_changed else None),
+                "action_checks": state_checks,
+            }
             report["observer_wall_seconds"] = time.monotonic() - started
             report["camera_actions_required"] = configure
             if changed:
                 self.contaminated = True
                 self.disabled = True
+                # A PNG written before restore can subsequently be invalidated.
+                # Move it out of rgb/ so the disk layout agrees with the index.
+                for view in report["views"]:
+                    try:
+                        original = Path(view["path"])
+                        quarantine = directory.parent / "diagnostics" / "invalidated_rgb"
+                        quarantine.mkdir(parents=True, exist_ok=True)
+                        destination = quarantine / original.name
+                        original.replace(destination)
+                        report.setdefault("diagnostic_frames", []).append({
+                            "path": str(destination), "purpose": "invalidated_after_restore",
+                            "approved_evidence": False})
+                    except Exception as exc:
+                        report.setdefault("diagnostic_save_errors", []).append(str(exc))
                 report["views"] = []
                 report["error"] = "Observation intervention changed native state; this attempt cannot support a mechanism claim"
         return report

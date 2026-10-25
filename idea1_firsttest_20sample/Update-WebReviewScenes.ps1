@@ -32,7 +32,7 @@ foreach($batch in $batches){
     $designLinks=@(RV-DesignLinks $source $root $PSScriptRoot)
     foreach($item in $batch.items){
         $path=Confined-File $source $item.id;$dir=[IO.Path]::GetDirectoryName($path)
-        $result=Read-SiteJson $path;$captures=RV-ExpandCaptureViews (Read-SiteJson (Join-Path $dir 'capture_index.json'));$segments=Read-SiteJson (Join-Path $dir 'actions_by_reset.json')
+        $result=Read-SiteJson $path;$captures=RV-ExpandCaptureViews (Read-SiteJson (Join-Path $dir 'capture_index.json')) (RV-LegacyMetadataOnlyReset $source);$segments=Read-SiteJson (Join-Path $dir 'actions_by_reset.json')
         if(@($captures).Count -ne @($item.frames).Count){throw "Screenshot count drift: $($item.id)"}
         $presentation=Get-MechanismReviewPresentation $result $captures $segments
         if(@($presentation.frame_notes).Count -ne @($captures).Count){throw "Frame explanation count mismatch: $($item.id)"}

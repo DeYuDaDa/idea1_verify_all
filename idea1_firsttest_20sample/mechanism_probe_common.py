@@ -22,6 +22,10 @@ class ProbeUnavailable(RuntimeError):
     """The required setup/measurement is unavailable; not a mechanism refutation."""
 
 
+class ObservationCaptureFailure(RuntimeError):
+    """A saved capture receipt failed; do not run the remaining experiment."""
+
+
 def native_temperature(obj: dict) -> Any:
     """Read the observed metadata schema, never invent a temperature baseline.
 
@@ -146,6 +150,7 @@ class ProbeContext:
         index = len(self.captures)
         safe_label = "".join(c if c.isalnum() or c in "_-" else "_" for c in str(label))[:100]
         row = {"label": label, "capture_index": index,
+               "image_requested": bool(image),
                "action_index": len(self.session.records) - 1,
                "action_segment": len(self._action_segments) - 1,
                "elapsed_wall_seconds": time.monotonic() - self.started,
@@ -188,16 +193,23 @@ class ProbeContext:
                 row["capture_error"] = f"{type(exc).__name__}: {exc}"
         self.captures.append(row)
         write_json(self.out / "snapshots" / f"{index:04d}_{safe_label}.json", row)
+        if image and row.get("capture_error"):
+            # Preserve the original failure before unwinding. Continuing after
+            # a lost baseline only produces incomplete trajectories, not data.
+            raise ObservationCaptureFailure(f"{label}: {row['capture_error']}")
         return row
 
-    def observe(self, steps=None, wall_seconds: float = 0) -> list[dict]:
+    def observe(self, steps=None, wall_seconds: float = 0, *, total_steps: int | None = None) -> list[dict]:
         requested = self.sample_steps if steps is None else tuple(sorted(set(int(n) for n in steps)))
         if not requested or min(requested) < 0 or wall_seconds < 0:
             raise ValueError("Invalid observation steps/time")
+        horizon = max(requested) if total_steps is None else int(total_steps)
+        if horizon < max(requested):
+            raise ValueError("Observation horizon cannot precede a requested image sample")
         prefix = f"trajectory_{len(self.captures):04d}"
         rows = []
         start = time.monotonic()
-        for n in range(max(requested) + 1):
+        for n in range(horizon + 1):
             if n:
                 self.step("Pass")
             if n in requested:

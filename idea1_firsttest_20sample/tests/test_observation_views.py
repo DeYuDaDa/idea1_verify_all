@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from observation_views import EvidenceCameras, world_state, physics_is_paused
+from observation_views import (DIAGNOSTIC_MAX_OBJECTS, EvidenceCameras, physics_is_paused,
+                               state_diff_audit, world_state)
 
 
 def small_plan(*args, **kwargs):
@@ -20,7 +21,7 @@ def small_plan(*args, **kwargs):
 
 
 class Session:
-    def __init__(self, mutate=False, paused=False):
+    def __init__(self, mutate=False, paused=False, mutate_on_unpause=False):
         self.records = [{"action": "Initialize", "lastActionSuccess": True}]
         if paused:
             self.records.append({"action": "PausePhysicsAutoSim", "lastActionSuccess": True})
@@ -28,6 +29,7 @@ class Session:
                           "position": {"x": 1, "y": 1, "z": 1}}], "thirdPartyCameras": []}
         self.cameras = []
         self.mutate = mutate
+        self.mutate_on_unpause = mutate_on_unpause
         self.controller = SimpleNamespace(last_event=None)
         self.refresh()
 
@@ -54,6 +56,8 @@ class Session:
             self.cameras[kwargs["thirdPartyCameraId"]] = copy.deepcopy(kwargs)
             if self.mutate:
                 self.metadata["objects"][0]["temperature"] = "Hot"
+        elif action == "UnpausePhysicsAutoSim" and self.mutate_on_unpause:
+            self.metadata["objects"][0]["temperature"] = "Hot"
         self.metadata["thirdPartyCameras"] = [{"thirdPartyCameraId": i, **c} for i,c in enumerate(self.cameras)]
         row = {"action": action, "lastActionSuccess": True, "kwargs": kwargs}
         self.records.append(row)
@@ -98,12 +102,75 @@ class ObserverTests(unittest.TestCase):
         session = Session(mutate=True)
         observer = EvidenceCameras(session, family="coffee")
         with tempfile.TemporaryDirectory() as tmp:
-            report = observer.capture(session.snapshot(), {"Mug": "mug"}, Path(tmp), "changed")
+            rgb = Path(tmp) / "rgb"
+            report = observer.capture(session.snapshot(), {"Mug": "mug"}, rgb, "changed")
+            self.assertTrue(report.get("diagnostic_metadata_directory"))
+            diagnostic = Path(report["diagnostic_metadata_directory"])
+            self.assertTrue((diagnostic / "before.json").is_file())
+            self.assertTrue((diagnostic / "update_camera_candidate_after.json").is_file())
+            self.assertTrue(report.get("diagnostic_frames"))
+            self.assertTrue(all(not f["approved_evidence"] for f in report["diagnostic_frames"]))
+            self.assertFalse(list(rgb.glob("changed_view_*.png")))
         self.assertTrue(report["world_state_changed"])
         self.assertEqual(report["views"], [])
         self.assertTrue(observer.contaminated)
         self.assertIn("mug", report["changed_objects"])
         self.assertFalse(physics_is_paused(session.records))
+        audit = report["state_diff_audit"]
+        self.assertEqual(audit["first_changed_action"]["phase"], "update_camera_candidate")
+        self.assertEqual(audit["first_changed_action"]["action"], "UpdateThirdPartyCamera")
+        first = next(row for row in audit["action_checks"] if row["changed_entity_count"])
+        self.assertEqual(first["changes"][0]["object_id"], "mug")
+        self.assertEqual(first["changes"][0]["selected_target_roles"], ["Mug"])
+        self.assertFalse(first["changes"][0]["unrelated_object"])
+        self.assertEqual(first["changes"][0]["fields"]["temperature"],
+                         {"before": "RoomTemp", "after": "Hot"})
+        self.assertEqual(audit["action_checks"][-1]["phase"], "unpause")
+        self.assertEqual(report["views"], [])
+
+    @patch("observation_views.plan_views", small_plan)
+    def test_restore_drift_quarantines_pngs_already_written(self):
+        session = Session(mutate_on_unpause=True)
+        observer = EvidenceCameras(session, family="coffee")
+        with tempfile.TemporaryDirectory() as tmp:
+            rgb = Path(tmp) / "rgb"
+            report = observer.capture(session.snapshot(), {"Mug": "mug"}, rgb, "restore")
+            self.assertEqual(report["views"], [])
+            self.assertTrue(report["world_state_changed"])
+            self.assertEqual(report["state_diff_audit"]["first_changed_action"]["phase"], "unpause")
+            self.assertFalse(list(rgb.glob("restore_view_*.png")))
+            invalidated = [f for f in report["diagnostic_frames"]
+                           if f["purpose"] == "invalidated_after_restore"]
+            self.assertEqual(len(invalidated), 1)
+            self.assertTrue(Path(invalidated[0]["path"]).is_file())
+            self.assertFalse(invalidated[0]["approved_evidence"])
+
+    def test_state_diff_audit_identifies_added_unrelated_object_and_bounds_entries(self):
+        before = world_state({"objects": [{"objectId": "mug", "position": {"x": 0}}]})
+        after = world_state({"objects": [{"objectId": "mug", "position": {"x": 1}},
+                                          {"objectId": "apple", "isMoving": True}]})
+        audit = state_diff_audit(before, after, {"Mug": "mug"}, phase="add_camera_candidate",
+                                 action="AddThirdPartyCamera", action_index=7,
+                                 action_kwargs={"position": {"x": 0, "y": 2, "z": 1}})
+        self.assertEqual(audit["action_index"], 7)
+        self.assertEqual(audit["phase"], "add_camera_candidate")
+        mug = next(row for row in audit["changes"] if row["object_id"] == "mug")
+        apple = next(row for row in audit["changes"] if row["object_id"] == "apple")
+        self.assertEqual(mug["fields"]["position"]["before"]["x"], 0.0)
+        self.assertEqual(mug["fields"]["position"]["after"]["x"], 1.0)
+        self.assertFalse(mug["unrelated_object"])
+        self.assertTrue(apple["unrelated_object"])
+        self.assertEqual(apple["status"], "added")
+
+        many_before = world_state({"objects": []})
+        many_after = world_state({"objects": [{"objectId": f"obj-{i}"} for i in range(50)]})
+        bounded = state_diff_audit(many_before, many_after, {}, phase="test", action="Pass",
+                                   action_index=8)
+        self.assertEqual(len(bounded["changes"]), DIAGNOSTIC_MAX_OBJECTS)
+        self.assertTrue(bounded["truncated"])
+        self.assertEqual(bounded["changed_entity_count"], 50)
+        self.assertEqual(bounded["changed_entity_key_count"], 50)
+        self.assertEqual(len(bounded["changed_entities"]), DIAGNOSTIC_MAX_OBJECTS)
 
 
 if __name__ == "__main__":

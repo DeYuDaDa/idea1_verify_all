@@ -9,6 +9,7 @@
   const mechanismQuestions = {F1:'触发动作的顺序是否改变结果？', F2:'事件的实际作用边界是什么，哪些对象或事实受影响？', F3:'多个对象是否保持各自独立的状态变化？', F4:'温度与熟度是否被分开记录和推断？', F5:'清洁状态与注液状态是否被分开记录和推断？', F6:'咖啡液体相关机制是否受其门控条件约束？', F7:'当前承载关系是否决定对象随承载物变化？', F8:'旋钮操作是否只映射到对应炉头？', F9:'时间推进的背景演化是否与事件直接效果区分？', F10:'本项指定的嵌套关系链是否成立？', F11:'两个可能的支撑来源是否构成替代关系？'};
   let batches = [], current = null, questions = [], selected = null, review = {}, saved = true;
   const json = obj => JSON.stringify(obj, null, 2);
+  const mediaIssues = item => (item.frames||[]).filter(f=>!f.src || (f.source_status && f.source_status!=='available'));
   function notice(text) { $('notice').textContent = text; $('notice').hidden = !text; }
   function el(tag, text, className) { const node = document.createElement(tag); if(text !== undefined) node.textContent = text; if(className) node.className = className; return node; }
   function payload(mi) {
@@ -46,14 +47,14 @@
   function entry(key) { return review[key] || {status:'pending',reason:'',tags:[]}; }
   function filtered() {
     const term = $('search').value.trim().toLowerCase(), filter = $('filter').value;
-    return questions.filter(q => (filter === 'all' || entry(q.key).status === filter) && `${q.item.label} ${q.id} ${q.text}`.toLowerCase().includes(term));
+    return questions.filter(q => (filter === 'all' || (filter === 'source_problem' ? mediaIssues(q.item).length>0 : entry(q.key).status === filter)) && `${q.item.label} ${q.id} ${q.text}`.toLowerCase().includes(term));
   }
   function drawNav() {
     const nav = $('items'); nav.replaceChildren();
     for(const q of filtered()) {
       const e = entry(q.key), button = el('button'); button.type = 'button'; button.setAttribute('aria-current',String(q === selected));
       button.append(el('span',symbols[e.status],`status-symbol ${e.status}`));
-      const label = el('span',q.item.presentation?.title || q.item.label,'label'); label.append(el('small',q.item.kind === 'dataset' ? `${q.item.label} · ${q.id}` : q.item.label)); button.append(label);
+      const label = el('span',q.item.presentation?.title || q.item.label,'label'); label.append(el('small',q.item.kind === 'dataset' ? `${q.item.label} · ${q.id}` : q.item.label)); const bad=mediaIssues(q.item).length;if(bad)label.append(el('small',`图片来源异常 ${bad} 项`));button.append(label);
       button.addEventListener('click',() => choose(q)); nav.append(button);
     }
     const counts = {pending:0,pass:0,reject:0}; for(const q of questions) counts[entry(q.key).status]++;
@@ -83,7 +84,8 @@
   function drawImages(item) {
     $('images').replaceChildren();
     $('image-title').textContent = item.kind === 'dataset' ? '模型看到的图片（原顺序）' : '候选图片与每张图的用途（原顺序）';
-    $('image-count').textContent = `${item.frames.length} 张 · 点击看原图`;
+    const available=item.frames.filter(f=>!!f.src).length;
+    $('image-count').textContent = `${available} 张可查看 / ${item.frames.length} 个画面项 · 点击看原图`;
     item.frames.forEach((frame,i) => {
       const note=item.presentation?.frame_notes?.[i];
       const figure=el('figure'), caption=note ? `${i+1} / ${item.frames.length} · ${note.purpose}` : `${i+1} / ${item.frames.length} · ${frame.stage || '未标注阶段'}`;
@@ -92,7 +94,10 @@
         image.src=frame.src;image.alt=caption;image.loading='lazy';image.decoding='async';
         image.addEventListener('error',()=>{button.replaceWith(el('div','图片读取失败：请检查审核包是否完整。','missing'));});
         button.append(image);button.addEventListener('click',()=>{ $('large-image').src=frame.src; $('large-image').alt=caption; $('lightbox-label').textContent=caption; $('lightbox').showModal(); });figure.append(button);
-      } else figure.append(el('div','缺图：此处证据不完整','missing'));
+      } else {
+        const title=frame.source_status==='generation_failed'?'原始图片生产失败':frame.source_status==='file_missing'?'原始文件缺失':frame.source_status==='invalid_path'?'原始路径不兼容':'原始记录没有可用图片';
+        const box=el('div',title,'missing');box.append(el('small',frame.source_message||'此处证据不完整；旧网页包没有记录缺失原因。'));figure.append(box);
+      }
       const text=el('figcaption',caption);if(note?.process)text.append(el('span',note.process,'frame-process'));figure.append(text);$('images').append(figure);
     });
     if(!item.frames.length) $('images').append(el('div','此记录没有截图。','missing'));
@@ -131,6 +136,10 @@
       $('boundary').classList.add('warning');
       $('boundary').textContent='该次运行没有完成。下方是已留档的请求构造文本，不能由此证明模型已经成功收到或处理这些输入。';
     }
+    const issues=mediaIssues(item), generated=issues.filter(f=>f.source_status==='generation_failed').length;
+    const invalidNative=item.native_measurement_valid===false;
+    $('media-warning').hidden=!issues.length&&!invalidNative;
+    $('media-warning').textContent=(issues.length?`源数据图片不完整：本条 ${issues.length} 个画面项异常${generated?`，其中 ${generated} 项为服务器未能生成/采纳图片`:''}。重建网页不能补出未生成的图。`:'')+(invalidNative?' 本条原生机制测量也被运行记录标记为无效，不能采用这里的结果作为机制标准答案。':'');
     drawScenario(item);drawImages(item);
     $('prompt-panel').hidden=!isDataset&&!p;
     $('prompt-panel').open=isDataset;
@@ -186,7 +195,9 @@
       else questions.push({id:item.presentation?'scenario-v2':'visual',text:item.presentation?.title||mechanismQuestions[item.fact_id]||'检查本项诊断截图是否足以看清目标状态。',key:`${item.id}/${item.presentation?'scenario-v2':'visual'}`,item});
     }
     $('search').value='';$('filter').value='all';notice('');loadReview();
-    if(current.review_revision)notice('本版新增了具体场景和候选问题，审核范围已扩大。旧版截图意见保留在原浏览器存储中；本版单独记录，不自动当作题目通过。');
+    const broken=current.items.reduce((n,item)=>n+mediaIssues(item).length,0), invalidNative=current.items.filter(item=>item.native_measurement_valid===false).length;
+    if(broken||invalidNative)notice(`当前批次原始媒体异常 ${broken} 项${invalidNative?`，另有 ${invalidNative} 条原生测量被记录为无效`:''}。页面用于诊断，不能当作完整可用数据。请看每条顶部和图片框内的具体原因。`);
+    else if(current.review_revision)notice('本版新增了具体场景和候选问题，审核范围已扩大。旧版截图意见保留在原浏览器存储中；本版单独记录，不自动当作题目通过。');
     selected=null;
     if(questions.length)choose(questions[0]);else{$('detail').hidden=true;$('empty').hidden=false;drawNav();}
   }

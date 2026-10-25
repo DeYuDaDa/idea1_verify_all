@@ -17,7 +17,7 @@
 <div class="workspace">
   <aside>
     <input id="search" type="search" placeholder="搜索题号或问题" aria-label="搜索题号或问题">
-    <select id="filter" aria-label="筛选审核状态"><option value="all">全部</option><option value="pending">未审核</option><option value="reject">不通过</option><option value="pass">通过</option></select>
+    <select id="filter" aria-label="筛选审核状态"><option value="all">全部</option><option value="pending">未审核</option><option value="reject">不通过</option><option value="pass">通过</option><option value="source_problem">图片不完整 / 生产失败</option></select>
     <p id="progress"></p><nav id="items" aria-label="题目列表"></nav>
     <details class="help"><summary>使用说明</summary><p>先看模型能获得的证据，判断问题是否有唯一、可推出的答案。不通过时选择或填写原因。参考答案默认隐藏；模型预测不显示。</p><p>键盘：Alt + ← / → 切题；Alt + 1 通过；Alt + 2 不通过。输入原因时不会触发切题快捷键。</p><p>审核自动存于当前浏览器；建议结束时导出 JSON。换电脑、浏览器或移动网页后，可用“恢复审核”导入。</p></details>
   </aside>
@@ -26,6 +26,7 @@
     <article id="detail" hidden>
       <div class="item-heading"><div><span id="item-id"></span><h1 id="question"></h1><p id="question-extra"></p></div><div class="pager"><button id="prev" aria-label="上一题">← 上一题</button><button id="next" aria-label="下一题">下一题 →</button></div></div>
       <p id="boundary" class="boundary"></p>
+      <p id="media-warning" class="source-warning" role="alert" hidden></p>
       <section id="scenario" class="scenario" hidden>
         <h2>这条记录做了什么</h2><p id="scene-initial"></p><ol id="scene-steps"></ol>
         <p id="scene-purpose" class="scene-purpose"></p>

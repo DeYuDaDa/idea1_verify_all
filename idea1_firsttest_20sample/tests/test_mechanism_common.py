@@ -1,11 +1,13 @@
 """Contract tests use fake native metadata; no controller or Unity is started."""
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from mechanism_probe_common import ProbeContext, ProbeUnavailable, native_temperature
+from mechanism_probe_common import (ObservationCaptureFailure, ProbeContext, ProbeUnavailable,
+                                    native_temperature)
 
 
 class Session:
@@ -24,6 +26,38 @@ class Session:
 
 
 class CommonContractTests(unittest.TestCase):
+    def test_capture_failure_persists_receipt_before_stopping(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = ProbeContext(Session(), Path(tmp) / "trial")
+            ctx.evidence_cameras = SimpleNamespace(capture=lambda *args: {
+                "views": [], "world_state_changed": True, "error": "camera changed state"})
+            with self.assertRaisesRegex(ObservationCaptureFailure, "camera changed state"):
+                ctx.capture("scene_initial")
+            self.assertEqual(len(ctx.captures), 1)
+            saved = json.loads((ctx.out / "snapshots/0000_scene_initial.json").read_text())
+            self.assertTrue(saved["image_requested"])
+            self.assertEqual(saved["view_frames"], [])
+            self.assertEqual(saved["capture_error"], "camera changed state")
+            self.assertEqual(len(ctx.session.records), 1)
+
+    def test_sparse_images_preserve_full_observation_pass_horizon(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = ProbeContext(Session(), Path(tmp) / "trial", sample_steps=(0, 1, 4, 12, 36))
+            capture_at = []
+            def capture(label):
+                capture_at.append(len(ctx.session.records) - 1)
+                return {"label": label}
+            ctx.capture = capture
+            rows = ctx.observe(total_steps=36)
+            self.assertEqual(capture_at, [0, 1, 4, 12, 36])
+            self.assertEqual(len(rows), 5)
+            self.assertEqual(sum(r["action"] == "Pass" for r in ctx.session.records), 36)
+            # A shorter photo schedule must not shorten the native experiment.
+            ctx.sample_steps = (0,)
+            start = len(ctx.session.records)
+            self.assertEqual(len(ctx.observe(total_steps=36)), 1)
+            self.assertEqual(len(ctx.session.records) - start, 36)
+
     def test_real_temperature_key_and_legacy_query_spellings_agree(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = Session()

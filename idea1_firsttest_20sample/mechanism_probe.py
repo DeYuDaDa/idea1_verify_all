@@ -13,7 +13,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
-from mechanism_probe_common import ProbeContext, ProbeUnavailable, write_json
+from mechanism_probe_common import ObservationCaptureFailure, ProbeContext, ProbeUnavailable, write_json
 from runtime import ActionFailure, ControllerSession
 
 HERE = Path(__file__).resolve().parent
@@ -67,6 +67,11 @@ def summarise(rows: list[dict], selected: list, run_metadata: dict) -> dict:
         }
     return {**run_metadata, "attempts_completed": len(rows),
             "status_counts": dict(Counter(r["status"] for r in rows)),
+            "capture_failure_attempts": sum(r.get("visual_capture_status") == "capture_incomplete" for r in rows),
+            "invalid_native_measurements": sum(r.get("native_measurement_valid") is False for r in rows),
+            "has_capture_or_measurement_failure": any(
+                r.get("visual_capture_status") == "capture_incomplete"
+                or r.get("native_measurement_valid") is False for r in rows),
             "facts": facts, "attempts": rows,
             "is_benchmark_evaluation": False, "model_loaded": False,
             "hard_groups_automatically_approved": False,
@@ -198,6 +203,9 @@ def main(argv=None) -> int:
                         raise ValueError("Probe result must explicitly state an observation status")
                     row["status"] = result["status"]
                     row["observation"] = result
+                except ObservationCaptureFailure as exc:
+                    row.update(status="inconclusive", error=str(exc),
+                               stopped_at="capture_failure", remaining_events_skipped=True)
                 except ProbeUnavailable as exc:
                     row.update(status="setup_unavailable", error=str(exc))
                 except ActionFailure as exc:
@@ -210,11 +218,23 @@ def main(argv=None) -> int:
                     row["elapsed_wall_seconds"] = time.monotonic() - started
                     if ctx is not None:
                         try:
-                            ctx.capture("attempt_final")
+                            # A failed observer must not create another fake
+                            # picture request during error cleanup.
+                            observer = ctx.evidence_cameras
+                            try:
+                                ctx.capture("attempt_final", image=not (
+                                    observer.disabled or observer.contaminated or observer.unhealthy
+                                    or row.get("stopped_at") == "capture_failure"))
+                            except ObservationCaptureFailure as exc:
+                                row["final_capture_error"] = str(exc)
                             ctx.flush()
                             row["checks"] = ctx.checks
                             row["role_bindings"] = ctx.roles
                             row["capture_count"] = len(ctx.captures)
+                            row["image_capture_points_requested"] = sum(
+                                c.get("image_requested") is True for c in ctx.captures)
+                            row["metadata_only_records"] = sum(
+                                c.get("image_requested") is False for c in ctx.captures)
                             row["capture_errors"] = [c["capture_error"] for c in ctx.captures if "capture_error" in c]
                             row["view_mode"] = args.view_mode
                             row["image_view_count"] = sum(len(c.get("view_frames", [])) for c in ctx.captures)
@@ -232,7 +252,8 @@ def main(argv=None) -> int:
                     rows.append({k: value for k, value in row.items() if k not in {"observation", "traceback"}})
                     write_json(out / "summary.json", summarise(rows, selected, metadata))
                     print(f"{case.case_id} {scene}: {row['status']} ({row['elapsed_wall_seconds']:.1f}s)", flush=True)
-                    if (case.fact_id in {"F9", "F11"} or (ctx is not None and ctx.evidence_cameras.unhealthy)) and session is not None:
+                    if (case.fact_id in {"F9", "F11"} or (ctx is not None and (
+                            ctx.evidence_cameras.unhealthy or ctx.evidence_cameras.contaminated))) and session is not None:
                         # These probes manipulate auto-simulation. A fresh
                         # process prevents an unsupported unpause/reset path
                         # from contaminating subsequent experiments.
@@ -251,8 +272,14 @@ def main(argv=None) -> int:
     result["fatal_error"] = fatal_error
     write_json(out / "summary.json", result)
     print(json.dumps({"output": str(out), "execution_completed": result["execution_completed"],
-                      "status_counts": result["status_counts"], "fatal_error": fatal_error}, indent=2), flush=True)
-    return 2 if fatal_error or any(r["status"] == "probe_error" for r in rows) else 0
+                      "status_counts": result["status_counts"], "fatal_error": fatal_error,
+                      "capture_failure_attempts": result["capture_failure_attempts"],
+                      "invalid_native_measurements": result["invalid_native_measurements"]}, indent=2), flush=True)
+    if result["has_capture_or_measurement_failure"]:
+        print("ERROR: Image capture or native measurement failed. Logs were preserved; "
+              "this is not a complete usable evidence batch.", flush=True)
+    return 2 if (fatal_error or any(r["status"] == "probe_error" for r in rows)
+                 or result["has_capture_or_measurement_failure"]) else 0
 
 
 if __name__ == "__main__":
