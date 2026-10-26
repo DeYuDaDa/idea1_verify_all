@@ -1,10 +1,12 @@
 """Pure checks for false mechanism labels; these fixtures never run Unity."""
 import copy
 import unittest
+from types import SimpleNamespace
 
 from mechanism_probe import registry
 from mechanism_rechecks import (RELATIONS, comparison_summary, evaluate_motion,
-                                evaluate_thermal, expected_follow)
+                                evaluate_thermal, expected_follow, transfer_bundle_external)
+from mechanism_probe_common import ProbeUnavailable
 
 
 def body(x=0, z=0, oid="a"):
@@ -12,6 +14,21 @@ def body(x=0, z=0, oid="a"):
 
 
 class RecheckTests(unittest.TestCase):
+    def test_bundle_put_retries_another_native_surface_without_repicking_or_teleporting(self):
+        ctx = BundleContext()
+        transfer_bundle_external(ctx)
+        puts = [r for r in ctx.session.records if r["action"] == "PutObject"]
+        self.assertEqual([r["kwargs"]["objectId"] for r in puts], ["bad", "bad", "good"])
+        self.assertEqual(ctx.pickups, 1)
+        self.assertEqual(ctx.roles["external"], "good")
+        self.assertTrue(ctx.checks[-1]["passed"])
+
+    def test_failed_bundle_put_losing_inventory_stops_before_retry(self):
+        ctx = BundleContext(lose_inventory=True)
+        with self.assertRaisesRegex(ProbeUnavailable, "lost held bowl"):
+            transfer_bundle_external(ctx)
+        self.assertEqual(sum(r["action"] == "PutObject" for r in ctx.session.records), 1)
+
     def test_suite_does_not_expand_original_45_or_omit_any_recheck_arm(self):
         self.assertEqual(len(registry()), 45)
         self.assertEqual(len(registry("rechecks")), 12)
@@ -73,6 +90,49 @@ class RecheckTests(unittest.TestCase):
         result = comparison_summary(rows)["groups"]["R1"]
         self.assertTrue(result["all_attempted"])
         self.assertFalse(result["whole_pattern_supported"])
+
+
+class BundleContext:
+    """Injected native responses only; not a simulator reproduction."""
+    def __init__(self, lose_inventory=False):
+        self.roles = {"support": "support", "outer": "plate", "inner": "bowl", "content": "apple"}
+        self.objects = {k: {**body(x, oid=k), "objectType": "CounterTop", "receptacle": True}
+                        for k, x in (("support", 0), ("bad", 10), ("good", 5))}
+        self.objects.update({k: {**body(oid=k), "objectType": k} for k in ("plate", "bowl", "apple")})
+        self.objects["bowl"]["receptacleObjectIds"] = ["apple"]
+        self.held, self.pickups, self.checks = [], 0, []
+        self.lose_inventory = lose_inventory
+        self.session = SimpleNamespace(records=[], inventory=lambda: self.held,
+                                       snapshot=lambda: {"objects": list(self.objects.values())})
+        self.ops = SimpleNamespace(seed=17, pickup_event=self.pickup)
+    def pickup(self, oid, look_first=False):
+        self.pickups += 1
+        self.held = [{"objectId": oid}]
+    def obj(self, role):
+        return self.objects[self.roles.get(role, role)]
+    def bind(self, role, oid):
+        self.roles[role] = oid
+    def require(self, condition, message):
+        if not condition:
+            raise ProbeUnavailable(message)
+    def capture(self, *args, **kwargs):
+        pass
+    def check(self, name, passed, detail):
+        self.checks.append({"name": name, "passed": passed, "detail": detail})
+    def step(self, action, **kwargs):
+        record = {"action": action, "kwargs": kwargs, "lastActionSuccess": True}
+        self.session.records.append(record)
+        if action == "PutObject" and kwargs["objectId"] == "bad":
+            record["lastActionSuccess"] = False
+            if self.lose_inventory:
+                self.held = []
+            raise RuntimeError("No valid positions to place object found")
+        if action == "PutObject":
+            self.objects["bowl"]["parentReceptacles"] = ["good"]
+            self.objects["apple"]["parentReceptacles"] = ["bowl", "good"]
+            self.objects["good"]["receptacleObjectIds"] = ["bowl", "apple"]
+            self.held = []
+        return SimpleNamespace(record=record)
 
 
 if __name__ == "__main__":

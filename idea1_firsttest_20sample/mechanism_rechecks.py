@@ -92,8 +92,8 @@ def optional_setup_view(ctx, role):
     print(f"  Preview setup: {detail['status']} ({role}); native preconditions checked next", flush=True)
 
 
-def external_surface(ctx, origin):
-    """Use an existing different countertop; do not place an outsider on the same support."""
+def external_candidates(ctx, origin):
+    """Existing different countertops, ordered deterministically; geometry is only a candidate."""
     excluded = ctx.roles.get(origin, origin)
     candidates = [o for o in ctx.session.snapshot().get("objects", [])
                   if o.get("objectType") == "CounterTop" and o.get("receptacle") is True
@@ -101,8 +101,62 @@ def external_surface(ctx, origin):
     center = ctx.obj(origin).get("position")
     candidates = [o for o in candidates if vector(center, o.get("position")) is not None]
     ctx.require(bool(candidates), "No existing external countertop candidate")
-    chosen = max(candidates, key=lambda o: norm(vector(center, o["position"])))
+    return sorted(candidates, key=lambda o: (-norm(vector(center, o["position"])), o["objectId"]))
+
+
+def external_surface(ctx, origin):
+    chosen = external_candidates(ctx, origin)[0]
     return ctx.bind("external", chosen["objectId"])
+
+
+def transfer_bundle_external(ctx):
+    """Bounded native Put retries, only for the R1 bowl+apple setup.
+
+    Step41 rejected one destination. It did not test all existing surfaces.
+    Never teleport the contents, replace objects, or retry after losing the held bowl.
+    """
+    destinations = external_candidates(ctx, "support")[:3]
+    held_id = ctx.roles["inner"]
+    try:
+        ctx.ops.pickup_event(held_id, look_first=False)
+    except Exception as exc:
+        raise ProbeUnavailable(f"Bundle setup pickup failed: {exc}") from exc
+    trials = []
+    base_seed = int(ctx.ops.seed)
+    for destination in destinations:
+        ctx.bind("external", destination["objectId"])
+        for seed in (base_seed, base_seed + 1):
+            ctx.require(any(o.get("objectId") == held_id for o in ctx.session.inventory()),
+                        "Bundle placement retry stopped: original bowl no longer held")
+            error = None
+            try:
+                result = ctx.step("PutObject", objectId=destination["objectId"],
+                                  forceAction=True, placeStationary=True, randomSeed=seed)
+                record = result.record
+            except Exception as exc:
+                error = str(exc)
+                record = ctx.session.records[-1] if ctx.session.records else {}
+            trials.append({"destination": destination["objectId"], "seed": seed,
+                           "record": record, "error": error})
+            ctx.capture(f"bundle_put_try_{len(trials):02d}", image=False)
+            if error is not None:
+                # A failed native call may have changed state. Do not assume
+                # it is safe to retry merely because it returned an error.
+                ctx.require(any(o.get("objectId") == held_id for o in ctx.session.inventory()),
+                            "Failed bundle Put lost held bowl; stop rather than reconstructing a success")
+                continue
+            for _ in range(4):
+                ctx.step("Pass")
+            valid = (relation(ctx, "inner", "external") and relation(ctx, "content", "inner")
+                     and unrelated(ctx, "inner", "outer") and unrelated(ctx, "content", "outer")
+                     and not ctx.session.inventory())
+            ctx.check("r1_bundle_external_placement", valid, {"trials": trials,
+                      "destination": destination["objectId"], "contents_preserved": relation(ctx, "content", "inner")})
+            ctx.require(valid, "Successful bundle Put did not preserve settled chain/disconnection; stop this setup")
+            ctx.capture("setup_transfer_inner_to_external")
+            return
+    ctx.check("r1_bundle_external_placement", False, {"trials": trials})
+    raise ProbeUnavailable(f"No valid native bundle destination after {len(trials)} bounded Put attempts")
 
 
 def transfer(ctx, child, parent):
@@ -154,7 +208,7 @@ def r1(configuration, pickup):
             if configuration == "apple_out":
                 transfer(ctx, "content", "external")
             else:
-                transfer(ctx, "inner", "external")
+                transfer_bundle_external(ctx)
                 ctx.require(relation(ctx, "content", "inner") and unrelated(ctx, "content", "outer"),
                             "Bowl transfer did not preserve apple while disconnecting it from outer")
                 if configuration == "apple_reparented":

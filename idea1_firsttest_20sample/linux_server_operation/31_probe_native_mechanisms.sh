@@ -58,7 +58,8 @@ names = ("mechanism_probe.py", "mechanism_probe_common.py", "mechanism_probes_th
          "view_planning.py", "observation_views.py", "nested_setup.py", "mechanism_rechecks.py",
          "tests/test_view_planning.py", "tests/test_observation_views.py", "tests/test_nested_setup.py",
          "tests/test_mechanism_common.py", "tests/test_mechanism_registry.py", "tests/test_mechanism_rechecks.py",
-         "linux_server_operation/31_probe_native_mechanisms.sh", "linux_server_operation/41_recheck_r1_r2.sh")
+         "linux_server_operation/31_probe_native_mechanisms.sh", "linux_server_operation/41_recheck_r1_r2.sh",
+         "linux_server_operation/42_complete_r1_bundle_arms.sh")
 with zipfile.ZipFile(archive_path, "x", zipfile.ZIP_DEFLATED) as bundle:
     for path in sorted(probe_root.rglob("*")):
         if path.is_file():
