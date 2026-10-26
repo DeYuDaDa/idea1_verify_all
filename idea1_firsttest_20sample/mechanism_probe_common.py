@@ -194,6 +194,10 @@ class ProbeContext:
             except Exception as exc:
                 # Keep native mechanism evidence even if preview generation fails.
                 row["capture_error"] = f"{type(exc).__name__}: {exc}"
+        if self.view_mode == "passive" and row.get("capture_error"):
+            # Saving the existing event frame has no native actions. A file or
+            # preview failure cannot invalidate an otherwise sound measurement.
+            row["preview_error"] = row.pop("capture_error")
         if image and row.get("capture_error"):
             checks = row.get("camera_audit", {}).get("state_diff_audit", {}).get("action_checks", [])
             failing = next((check for check in checks if check.get("guard_changed_entities")), None)

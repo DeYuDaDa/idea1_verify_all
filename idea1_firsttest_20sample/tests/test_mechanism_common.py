@@ -26,6 +26,18 @@ class Session:
 
 
 class CommonContractTests(unittest.TestCase):
+    def test_passive_preview_failure_keeps_metadata_and_does_not_call_native_actions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = Session()  # Deliberately has no renderer: preview fails.
+            ctx = ProbeContext(session, Path(tmp) / "trial", view_mode="passive")
+            row = ctx.capture("optional_preview")
+            self.assertIn("preview_error", row)
+            self.assertNotIn("capture_error", row)
+            self.assertEqual(len(session.records), 1)
+            self.assertTrue((ctx.out / "snapshots/0000_optional_preview.json").is_file())
+            ctx.step("Pass")  # The native experiment can continue.
+            self.assertEqual(len(session.records), 2)
+
     def test_native_only_mode_records_state_without_camera_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             session = Session()

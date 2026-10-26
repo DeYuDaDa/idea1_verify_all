@@ -7,6 +7,15 @@ from mechanism_probe import FACTS, FAMILY_SCENES, registry, summarise
 
 
 class RegistryTests(unittest.TestCase):
+    def test_optional_preview_failure_does_not_invalidate_native_measurement(self):
+        case = registry("rechecks")[0]
+        row = {"fact_id": case.fact_id, "case_id": case.case_id, "status": "observed_supported",
+               "scene": "FloorPlan1", "view_mode": "passive", "visual_capture_status": "preview_incomplete",
+               "preview_errors": ["PNG could not be written"]}
+        report = summarise([row], [case], {})
+        self.assertFalse(report["has_capture_or_measurement_failure"])
+        self.assertEqual(report["invalid_native_measurements"], 0)
+
     def test_deliberate_native_only_run_is_not_a_missing_image_failure(self):
         case = registry()[0]
         row = {"fact_id": case.fact_id, "case_id": case.case_id, "scene": "FloorPlan1",

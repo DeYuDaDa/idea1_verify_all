@@ -14,15 +14,15 @@ export DATA_ROOT
 probe_selection=("$@")
 while (($#)); do
   case "$1" in
-    --facts|--cases|--scenes|--max-scenes|--sample-steps|--seed|--view-mode)
+    --facts|--cases|--scenes|--max-scenes|--sample-steps|--seed|--view-mode|--suite)
       (($# >= 2)) || die "$1 requires a value."
       shift 2 ;;
-    *) die "Allowed options: --facts, --cases, --scenes, --max-scenes, --sample-steps, --seed, --view-mode (each with a value)." ;;
+    *) die "Allowed options: --facts, --cases, --scenes, --max-scenes, --sample-steps, --seed, --view-mode, --suite (each with a value)." ;;
   esac
 done
 
 # Only new mechanism contract tests. No stage-30 pipeline or model env is used.
-run_python -m compileall -q mechanism_probe.py mechanism_probe_common.py mechanism_probes_thermal_liquid.py mechanism_probes_relations.py view_planning.py observation_views.py nested_setup.py
+run_python -m compileall -q mechanism_probe.py mechanism_probe_common.py mechanism_probes_thermal_liquid.py mechanism_probes_relations.py view_planning.py observation_views.py nested_setup.py mechanism_rechecks.py
 for pattern in 'test_mechanism*.py' 'test_view_planning.py' 'test_observation_views.py' 'test_nested_setup.py'; do
   if run_python -m unittest discover -s tests -p "$pattern" -v; then
     :
@@ -55,10 +55,10 @@ archive_path, probe_root, project, log = map(Path, sys.argv[1:])
 names = ("mechanism_probe.py", "mechanism_probe_common.py", "mechanism_probes_thermal_liquid.py",
          "mechanism_probes_relations.py", "runtime.py", "interactions.py", "frame_evidence.py",
          "hard_group_plan.json", "困难组设计与机制依赖.md", "config.json",
-         "view_planning.py", "observation_views.py", "nested_setup.py",
+         "view_planning.py", "observation_views.py", "nested_setup.py", "mechanism_rechecks.py",
          "tests/test_view_planning.py", "tests/test_observation_views.py", "tests/test_nested_setup.py",
-         "tests/test_mechanism_common.py", "tests/test_mechanism_registry.py",
-         "linux_server_operation/31_probe_native_mechanisms.sh")
+         "tests/test_mechanism_common.py", "tests/test_mechanism_registry.py", "tests/test_mechanism_rechecks.py",
+         "linux_server_operation/31_probe_native_mechanisms.sh", "linux_server_operation/41_recheck_r1_r2.sh")
 with zipfile.ZipFile(archive_path, "x", zipfile.ZIP_DEFLATED) as bundle:
     for path in sorted(probe_root.rglob("*")):
         if path.is_file():

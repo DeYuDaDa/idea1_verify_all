@@ -28,7 +28,12 @@ FAMILY_SCENES = {
 }
 
 
-def registry():
+def registry(suite="base"):
+    if suite == "rechecks":
+        from mechanism_rechecks import cases
+        return cases()
+    if suite != "base":
+        raise ValueError(f"Unknown probe suite: {suite}")
     from mechanism_probes_thermal_liquid import cases as thermal_liquid
     from mechanism_probes_relations import cases as relations
     cases = thermal_liquid() + relations()
@@ -56,7 +61,9 @@ def log_check_values(detail) -> dict:
     """Readable native values, without dumping complete trajectories to stdout."""
     if not isinstance(detail, dict):
         return {}
-    values = {k: detail[k] for k in ("initial", "final", "initial_isDirty", "final_isDirty") if k in detail}
+    values = {k: detail[k] for k in ("initial", "final", "initial_isDirty", "final_isDirty",
+              "configuration", "pickup", "passed", "temperature_matches", "cooked_matches",
+              "expected_final_temperature", "expected_final_isCooked", "passes", "elapsed_wall_seconds") if k in detail}
     state_keys = ("temperature", "ObjectTemperature", "isCooked", "isDirty", "isFilledWithLiquid", "fillLiquid")
     for side in ("before", "after"):
         state = detail.get(side)
@@ -68,6 +75,8 @@ def log_check_values(detail) -> dict:
     if isinstance(metrics, list) and metrics and isinstance(metrics[-1], dict):
         values["last_motion_sample"] = {k: v for k, v in metrics[-1].items()
                                          if k.endswith("_m") or k in {"capture_label", "observation_passes"}}
+        if "displacement_m" in metrics[-1]:
+            values["last_motion_sample"] = metrics[-1]
     roles = detail.get("selected_roles")
     if isinstance(roles, dict):
         values["selected_types"] = {k: v.get("objectType") for k, v in roles.items() if isinstance(v, dict)}
@@ -106,14 +115,16 @@ def main(argv=None) -> int:
     parser.add_argument("--out", type=Path)
     parser.add_argument("--facts", default=",".join(FACTS))
     parser.add_argument("--cases", default="")
+    parser.add_argument("--suite", choices=("base", "rechecks"), default="base",
+                        help="base preserves the original 45 templates; rechecks selects only R1/R2 (12 arms)")
     parser.add_argument("--list", action="store_true", help="list native probes without starting Unity")
     parser.add_argument("--config", type=Path, default=HERE / "config.json")
     parser.add_argument("--scenes", default="", help="explicit scene list, otherwise family candidates")
     parser.add_argument("--max-scenes", type=int, default=2)
     parser.add_argument("--sample-steps", default="0,1,4,12,36")
     parser.add_argument("--seed", type=int, default=17)
-    parser.add_argument("--view-mode", choices=("none", "planned", "agent"), default="none",
-                        help="none verifies native mechanisms without camera calls (default); planned/agent explicitly request pictures")
+    parser.add_argument("--view-mode", choices=("none", "planned", "agent", "passive"), default="none",
+                        help="none: state only; passive: best-effort existing RGB without camera calls; planned/agent: strict images")
     parser.add_argument("--platform", choices=("Linux64", "CloudRendering"), default="CloudRendering")
     server_home = Path(os.environ.get("SERVER_HOME") or Path.home())
     server_profile = os.environ.get("THOR_SERVER_PROFILE", "auto")
@@ -126,7 +137,7 @@ def main(argv=None) -> int:
     parser.add_argument("--build-cache-dir", type=Path, default=data_root_default / "unity_cache")
     parser.add_argument("--local-executable-path", type=Path)
     args = parser.parse_args(argv)
-    all_cases = registry()
+    all_cases = registry(args.suite)
     requested = [part.strip() for part in args.facts.split(",") if part.strip()]
     if not requested or len(requested) != len(set(requested)) or set(requested) - set(FACTS):
         parser.error("--facts must be unique F1,...,F11 identifiers")
@@ -166,7 +177,8 @@ def main(argv=None) -> int:
     config = json.loads(args.config.read_text(encoding="utf-8"))
     source_files = ("mechanism_probe.py", "mechanism_probe_common.py", "mechanism_probes_thermal_liquid.py",
                     "mechanism_probes_relations.py", "runtime.py", "interactions.py", "frame_evidence.py",
-                    "hard_group_plan.json", "config.json", "view_planning.py", "observation_views.py", "nested_setup.py")
+                    "hard_group_plan.json", "config.json", "view_planning.py", "observation_views.py", "nested_setup.py",
+                    "mechanism_rechecks.py")
     versions, version_errors = {}, {}
     for name in ("ai2thor", "numpy", "Pillow"):
         try:
@@ -263,8 +275,11 @@ def main(argv=None) -> int:
                                 c.get("image_requested") is False for c in ctx.captures)
                             row["capture_errors"] = [c["capture_error"] for c in ctx.captures if "capture_error" in c]
                             row["view_mode"] = args.view_mode
-                            row["image_view_count"] = sum(len(c.get("view_frames", [])) for c in ctx.captures)
+                            row["preview_errors"] = [c["preview_error"] for c in ctx.captures if "preview_error" in c]
+                            row["image_view_count"] = sum(len(c["view_frames"]) if "view_frames" in c else
+                                                          int(bool(c.get("rgb_path"))) for c in ctx.captures)
                             row["visual_capture_status"] = ("not_requested" if args.view_mode == "none" else
+                                "preview_incomplete" if args.view_mode == "passive" and row["preview_errors"] else
                                 "needs_review" if not row["capture_errors"] else "capture_incomplete")
                             if ctx.evidence_cameras.contaminated or ctx.evidence_cameras.unhealthy:
                                 row["native_observation_status"] = row["status"]
@@ -303,6 +318,14 @@ def main(argv=None) -> int:
     result = summarise(rows, selected, metadata)
     result["execution_completed"] = fatal_error is None
     result["fatal_error"] = fatal_error
+    if args.suite == "rechecks":
+        from mechanism_rechecks import comparison_summary
+        comparisons = comparison_summary(rows)
+        result["recheck_comparisons"] = comparisons
+        write_json(out / "recheck_comparisons.json", comparisons)
+        for group, comparison in comparisons["groups"].items():
+            print(f"{group}: all_attempted={comparison['all_attempted']}, "
+                  f"whole_pattern_supported={comparison['whole_pattern_supported']}", flush=True)
     write_json(out / "summary.json", result)
     print(json.dumps({"output": str(out), "execution_completed": result["execution_completed"],
                       "status_counts": result["status_counts"], "fatal_error": fatal_error,
