@@ -7,6 +7,16 @@ from mechanism_probe import FACTS, FAMILY_SCENES, registry, summarise
 
 
 class RegistryTests(unittest.TestCase):
+    def test_deliberate_native_only_run_is_not_a_missing_image_failure(self):
+        case = registry()[0]
+        row = {"fact_id": case.fact_id, "case_id": case.case_id, "scene": "FloorPlan1",
+               "status": "observed_supported", "view_mode": "none",
+               "visual_capture_status": "not_requested", "image_view_count": 0}
+        report = summarise([row], [case], {})
+        self.assertEqual(report["capture_failure_attempts"], 0)
+        self.assertFalse(report["has_capture_or_measurement_failure"])
+        self.assertFalse(report["is_benchmark_evaluation"])
+
     def test_capture_failure_is_reported_separately_from_completed_probe_loop(self):
         case = registry()[0]
         row = {"fact_id": case.fact_id, "case_id": case.case_id, "scene": "FloorPlan1",

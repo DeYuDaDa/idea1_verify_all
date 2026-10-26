@@ -142,6 +142,8 @@ class ProbeContext:
 
     def capture(self, label: str, image: bool = True) -> dict:
         from frame_evidence import describe_frame
+        requested_by_caller = bool(image)
+        image = requested_by_caller and self.view_mode != "none"
         if self.session.records is not self._action_segments[-1]:
             # ControllerSession.reset assigns a fresh list. Keeping the old list
             # reference preserves setup actions of earlier intervention arms.
@@ -151,6 +153,7 @@ class ProbeContext:
         safe_label = "".join(c if c.isalnum() or c in "_-" else "_" for c in str(label))[:100]
         row = {"label": label, "capture_index": index,
                "image_requested": bool(image),
+               "image_omission_reason": "native_state_only_mode" if requested_by_caller and not image else None,
                "action_index": len(self.session.records) - 1,
                "action_segment": len(self._action_segments) - 1,
                "elapsed_wall_seconds": time.monotonic() - self.started,
@@ -191,12 +194,24 @@ class ProbeContext:
             except Exception as exc:
                 # Keep native mechanism evidence even if preview generation fails.
                 row["capture_error"] = f"{type(exc).__name__}: {exc}"
+        if image and row.get("capture_error"):
+            checks = row.get("camera_audit", {}).get("state_diff_audit", {}).get("action_checks", [])
+            failing = next((check for check in checks if check.get("guard_changed_entities")), None)
+            row["capture_failure_detail"] = None if failing is None else {
+                "phase": failing["phase"], "action": failing["action"],
+                "action_index": failing["action_index"],
+                "changed_entity_count": len(failing["guard_changed_entities"]),
+                "changes": [change for change in failing["changes"]
+                            if change["object_id"] in failing["guard_changed_entities"]
+                            or (change["entity_type"] == "agent_or_inventory"
+                                and "agent_or_inventory" in failing["guard_changed_entities"])][:5]}
         self.captures.append(row)
         write_json(self.out / "snapshots" / f"{index:04d}_{safe_label}.json", row)
         if image and row.get("capture_error"):
             # Preserve the original failure before unwinding. Continuing after
             # a lost baseline only produces incomplete trajectories, not data.
-            raise ObservationCaptureFailure(f"{label}: {row['capture_error']}")
+            detail = json.dumps(row.get("capture_failure_detail"), ensure_ascii=False)
+            raise ObservationCaptureFailure(f"{label}: {row['capture_error']}; first_rejected={detail}")
         return row
 
     def observe(self, steps=None, wall_seconds: float = 0, *, total_steps: int | None = None) -> list[dict]:

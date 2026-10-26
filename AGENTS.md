@@ -16,6 +16,15 @@
 
 ## Advisory notes for scene planning and capture (not mandatory gates)
 
+- Current scope (2026-10-26): these 45 designs investigate simulator mechanisms,
+  not a dataset-completion target. Retain adequately supported conditional
+  findings; rerun only unresolved evidence relevant to the research. Do not
+  require every room, construction or camera view to succeed. Native-only
+  mechanism verification (`--view-mode none`) is the default; image-based
+  answerability is a later, separate task. An intentionally imageless run is
+  not missing data. Keep camera/control diagnostics separate from mechanism
+  claims, and do not broadly drop motion/geometry checks to make runs pass.
+
 These are suggestions learned from earlier attempts, not additional mandatory
 requirements or approval steps. The 20-pair count above describes the original
 pilot; new mechanism probes and conditional hard-group plans are separate work.

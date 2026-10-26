@@ -9,7 +9,7 @@ from unittest.mock import patch
 import numpy as np
 
 from observation_views import (DIAGNOSTIC_MAX_OBJECTS, EvidenceCameras, physics_is_paused,
-                               state_diff_audit, world_state)
+                               observation_state_delta, state_diff_audit, world_state)
 
 
 def small_plan(*args, **kwargs):
@@ -21,7 +21,8 @@ def small_plan(*args, **kwargs):
 
 
 class Session:
-    def __init__(self, mutate=False, paused=False, mutate_on_unpause=False):
+    def __init__(self, mutate=False, paused=False, mutate_on_unpause=False,
+                 control_motion=False, move_during_pause=False):
         self.records = [{"action": "Initialize", "lastActionSuccess": True}]
         if paused:
             self.records.append({"action": "PausePhysicsAutoSim", "lastActionSuccess": True})
@@ -30,6 +31,10 @@ class Session:
         self.cameras = []
         self.mutate = mutate
         self.mutate_on_unpause = mutate_on_unpause
+        self.control_motion = control_motion
+        self.move_during_pause = move_during_pause
+        if control_motion:
+            self.metadata["objects"][0]["isMoving"] = True
         self.controller = SimpleNamespace(last_event=None)
         self.refresh()
 
@@ -50,14 +55,22 @@ class Session:
         return copy.deepcopy(self.metadata)
 
     def step(self, action, **kwargs):
-        if action == "AddThirdPartyCamera":
+        if action == "PausePhysicsAutoSim":
+            if self.control_motion:
+                self.metadata["objects"][0]["isMoving"] = False
+            if self.move_during_pause:
+                self.metadata["objects"][0]["position"]["x"] += 0.01
+        elif action == "AddThirdPartyCamera":
             self.cameras.append(copy.deepcopy(kwargs))
         elif action == "UpdateThirdPartyCamera":
             self.cameras[kwargs["thirdPartyCameraId"]] = copy.deepcopy(kwargs)
             if self.mutate:
                 self.metadata["objects"][0]["temperature"] = "Hot"
-        elif action == "UnpausePhysicsAutoSim" and self.mutate_on_unpause:
-            self.metadata["objects"][0]["temperature"] = "Hot"
+        elif action == "UnpausePhysicsAutoSim":
+            if self.mutate_on_unpause:
+                self.metadata["objects"][0]["temperature"] = "Hot"
+            if self.control_motion:
+                self.metadata["objects"][0]["isMoving"] = True
         self.metadata["thirdPartyCameras"] = [{"thirdPartyCameraId": i, **c} for i,c in enumerate(self.cameras)]
         row = {"action": action, "lastActionSuccess": True, "kwargs": kwargs}
         self.records.append(row)
@@ -66,6 +79,39 @@ class Session:
 
 
 class ObserverTests(unittest.TestCase):
+    def test_motion_flags_are_exempt_only_for_physics_control(self):
+        before = world_state({"objects": [{"objectId": "mug", "isMoving": True}]})
+        after = world_state({"objects": [{"objectId": "mug", "isMoving": False}]})
+        self.assertEqual(observation_state_delta(before, after, phase="pause"), ([], ["mug"]))
+        self.assertEqual(observation_state_delta(before, after, phase="unpause"), ([], ["mug"]))
+        self.assertEqual(observation_state_delta(before, after, phase="update_camera_candidate"), (["mug"], []))
+
+    @patch("observation_views.plan_views", small_plan)
+    def test_pause_motion_flags_rebase_without_hiding_camera_changes(self):
+        session = Session(control_motion=True)
+        observer = EvidenceCameras(session, family="coffee")
+        with tempfile.TemporaryDirectory() as tmp:
+            report = observer.capture(session.snapshot(), {"Mug": "mug"}, Path(tmp) / "rgb", "control")
+            self.assertEqual(len(report["views"]), 1)
+        self.assertFalse(report["world_state_changed"])
+        self.assertTrue(report["raw_metadata_changed"])
+        audit = report["state_diff_audit"]
+        self.assertEqual(audit["first_changed_action"]["phase"], "pause")
+        self.assertIsNone(audit["first_rejected_action"])
+        self.assertEqual(audit["action_checks"][0]["control_motion_flag_changes"], ["mug"])
+        self.assertTrue(all(not check["guard_changed_entities"] for check in audit["action_checks"]))
+
+    @patch("observation_views.plan_views", small_plan)
+    def test_pause_geometry_change_still_rejected(self):
+        session = Session(control_motion=True, move_during_pause=True)
+        observer = EvidenceCameras(session, family="coffee")
+        with tempfile.TemporaryDirectory() as tmp:
+            report = observer.capture(session.snapshot(), {"Mug": "mug"}, Path(tmp) / "rgb", "moved")
+        self.assertTrue(report["world_state_changed"])
+        self.assertEqual(report["views"], [])
+        self.assertEqual(report["state_diff_audit"]["first_rejected_action"]["phase"], "pause")
+        self.assertFalse(any(row["action"] == "AddThirdPartyCamera" for row in session.records))
+
     def test_world_guard_keeps_motion_state_even_without_position_change(self):
         before = {"objects": [{"objectId": "mug", "isMoving": True}]}
         after = {"objects": [{"objectId": "mug", "isMoving": False}]}

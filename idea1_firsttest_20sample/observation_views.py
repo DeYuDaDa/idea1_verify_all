@@ -59,6 +59,27 @@ def changed_objects(before: dict, after: dict) -> list[str]:
          ("agent_position", "agent_rotation", "inventory")) else [])
 
 
+def observation_state_delta(before: dict, after: dict, *, phase: str) -> tuple[list[str], list[str]]:
+    """Account for motion flags on physics-control transitions, and nothing else.
+
+    The step-39 native trace shows PausePhysicsAutoSim flips only isMoving for
+    four objects before any camera exists. Keep the raw trace, but do not use
+    that control flag as evidence of scene damage. Geometry, relations, all
+    other attributes and camera-phase motion flags remain strict comparisons.
+    """
+    if phase not in {"pause", "unpause"}:
+        return changed_objects(before, after), []
+    left, right = copy.deepcopy(before), copy.deepcopy(after)
+    control_flags = []
+    for object_id in set(left["objects"]) & set(right["objects"]):
+        old, new = left["objects"][object_id], right["objects"][object_id]
+        if old.get("isMoving") != new.get("isMoving"):
+            control_flags.append(object_id)
+        old.pop("isMoving", None)
+        new.pop("isMoving", None)
+    return changed_objects(left, right), sorted(control_flags)
+
+
 def _diagnostic_value(value):
     """Return a compact, bounded representation for saved state-diff audits."""
     if isinstance(value, dict):
@@ -219,6 +240,7 @@ class EvidenceCameras:
             for g in groups], sort_keys=True)
         configure = signature != self._signature
         baseline = world_state(metadata)
+        comparison_baseline = baseline
         already_paused = physics_is_paused(self.session.records)
         pause_attempted = False
         changed = set()
@@ -258,6 +280,7 @@ class EvidenceCameras:
                 report.setdefault("diagnostic_save_errors", []).append(f"{type(exc).__name__}: {exc}")
 
         def native(action, *, phase, **kwargs):
+            nonlocal comparison_baseline
             try:
                 result = self.session.step(action, raise_on_failure=True, **kwargs)
             finally:
@@ -269,14 +292,23 @@ class EvidenceCameras:
             action_index = result.record.get("index")
             if action_index is None and self.session.records:
                 action_index = self.session.records[-1].get("index", len(self.session.records) - 1)
-            check = state_diff_audit(baseline, after, selected_target_roles,
+            check = state_diff_audit(comparison_baseline, after, selected_target_roles,
                                      phase=phase, action=action, action_index=action_index,
                                      action_kwargs=kwargs)
+            guard_changes, control_flags = observation_state_delta(comparison_baseline, after, phase=phase)
+            check.update(guard_changed_entities=guard_changes,
+                         control_motion_flag_changes=control_flags,
+                         comparison_baseline="pre_capture" if phase == "pause" else "post_pause")
             state_checks.append(check)
-            changed.update(changed_objects(baseline, after))
+            changed.update(guard_changes)
             if changed:
                 save_failure_evidence(result, phase)
                 raise RuntimeError("Observer intervention changed native task state")
+            if phase == "pause":
+                # Compare all camera operations against the now-paused state.
+                # Otherwise the accepted pause flags would recur as a false
+                # camera failure on the very next Add/Update action.
+                comparison_baseline = after
             return result
 
         try:
@@ -356,9 +388,13 @@ class EvidenceCameras:
                     check = state_diff_audit(baseline, after, selected_target_roles,
                                              phase="unpause", action="UnpausePhysicsAutoSim",
                                              action_index=action_index)
+                    guard_changes, control_flags = observation_state_delta(baseline, after, phase="unpause")
+                    check.update(guard_changed_entities=guard_changes,
+                                 control_motion_flag_changes=control_flags,
+                                 comparison_baseline="pre_capture")
                     state_checks.append(check)
-                    changed.update(changed_objects(baseline, after))
-                    if check["changed_entity_count"]:
+                    changed.update(guard_changes)
+                    if guard_changes:
                         save_failure_evidence(result, "unpause")
                 except Exception as exc:
                     self.unhealthy = True
@@ -367,14 +403,21 @@ class EvidenceCameras:
             report["world_state_changed"] = bool(changed)
             report["changed_objects"] = sorted(changed)
             first_changed = next((check for check in state_checks if check["changed_entity_count"]), None)
+            first_rejected = next((check for check in state_checks if check["guard_changed_entities"]), None)
+            report["raw_metadata_changed"] = first_changed is not None
             report["state_diff_audit"] = {
-                "schema_version": 1,
-                "baseline": "metadata passed to capture before observation actions",
+                "schema_version": 2,
+                "baseline": "camera checks use post-pause state; restore checks use pre-capture state",
+                "control_flag_policy": "only isMoving on Pause/Unpause is excluded from rejection; raw differences retained",
                 "selected_target_roles": selected_target_roles,
                 "first_changed_action": ({"phase": first_changed["phase"],
                                            "action": first_changed["action"],
                                            "action_index": first_changed["action_index"]}
                                           if first_changed else None),
+                "first_rejected_action": ({"phase": first_rejected["phase"],
+                                            "action": first_rejected["action"],
+                                            "action_index": first_rejected["action_index"]}
+                                           if first_rejected else None),
                 "action_checks": state_checks,
             }
             report["observer_wall_seconds"] = time.monotonic() - started

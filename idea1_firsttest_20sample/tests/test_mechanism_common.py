@@ -26,6 +26,22 @@ class Session:
 
 
 class CommonContractTests(unittest.TestCase):
+    def test_native_only_mode_records_state_without_camera_calls(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            session = Session()
+            ctx = ProbeContext(session, Path(tmp) / "trial", view_mode="none")
+            def forbidden(*args):
+                raise AssertionError("Native-only mode invoked an evidence camera")
+            ctx.evidence_cameras.capture = forbidden
+            row = ctx.capture("scene_initial")
+            self.assertFalse(row["image_requested"])
+            self.assertEqual(row["image_omission_reason"], "native_state_only_mode")
+            self.assertNotIn("capture_error", row)
+            self.assertNotIn("rgb_path", row)
+            self.assertEqual(len(session.records), 1)
+            self.assertFalse((ctx.out / "rgb").exists())
+            self.assertTrue((ctx.out / "snapshots/0000_scene_initial.json").is_file())
+
     def test_capture_failure_persists_receipt_before_stopping(self):
         with tempfile.TemporaryDirectory() as tmp:
             ctx = ProbeContext(Session(), Path(tmp) / "trial")

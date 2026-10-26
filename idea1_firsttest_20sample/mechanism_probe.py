@@ -52,6 +52,29 @@ def inventory(metadata: dict) -> list[dict]:
     return [{k: obj[k] for k in fields if k in obj} for obj in metadata.get("objects", [])]
 
 
+def log_check_values(detail) -> dict:
+    """Readable native values, without dumping complete trajectories to stdout."""
+    if not isinstance(detail, dict):
+        return {}
+    values = {k: detail[k] for k in ("initial", "final", "initial_isDirty", "final_isDirty") if k in detail}
+    state_keys = ("temperature", "ObjectTemperature", "isCooked", "isDirty", "isFilledWithLiquid", "fillLiquid")
+    for side in ("before", "after"):
+        state = detail.get(side)
+        if isinstance(state, dict):
+            summary = {k: state[k] for k in state_keys if k in state}
+            if summary:
+                values[side] = summary
+    metrics = detail.get("metrics")
+    if isinstance(metrics, list) and metrics and isinstance(metrics[-1], dict):
+        values["last_motion_sample"] = {k: v for k, v in metrics[-1].items()
+                                         if k.endswith("_m") or k in {"capture_label", "observation_passes"}}
+    roles = detail.get("selected_roles")
+    if isinstance(roles, dict):
+        values["selected_types"] = {k: v.get("objectType") for k, v in roles.items() if isinstance(v, dict)}
+        values["placement_order"] = detail.get("placement_order")
+    return values
+
+
 def summarise(rows: list[dict], selected: list, run_metadata: dict) -> dict:
     facts = {}
     for fact_id in FACTS:
@@ -89,8 +112,8 @@ def main(argv=None) -> int:
     parser.add_argument("--max-scenes", type=int, default=2)
     parser.add_argument("--sample-steps", default="0,1,4,12,36")
     parser.add_argument("--seed", type=int, default=17)
-    parser.add_argument("--view-mode", choices=("planned", "agent"), default="planned",
-                        help="planned uses role-based evidence cameras; agent is a diagnostic baseline")
+    parser.add_argument("--view-mode", choices=("none", "planned", "agent"), default="none",
+                        help="none verifies native mechanisms without camera calls (default); planned/agent explicitly request pictures")
     parser.add_argument("--platform", choices=("Linux64", "CloudRendering"), default="CloudRendering")
     server_home = Path(os.environ.get("SERVER_HOME") or Path.home())
     server_profile = os.environ.get("THOR_SERVER_PROFILE", "auto")
@@ -160,6 +183,9 @@ def main(argv=None) -> int:
                 "trial_reset_policy": "fresh native scene reset before every case",
                 "time_contract": "Pass counts and wall time are recorded separately; equal simulated duration is not assumed."}
     write_json(out / "run_manifest.json", metadata)
+    print(f"Purpose: native mechanism verification; view_mode={args.view_mode}", flush=True)
+    if args.view_mode == "none":
+        print("Images intentionally disabled. No capture-induced Pause/Add/Update/Unpause calls will be made; no rgb directory is required.", flush=True)
     write_json(out / "summary.json", summarise([], selected, metadata))
     rows = []
     session = None
@@ -238,7 +264,8 @@ def main(argv=None) -> int:
                             row["capture_errors"] = [c["capture_error"] for c in ctx.captures if "capture_error" in c]
                             row["view_mode"] = args.view_mode
                             row["image_view_count"] = sum(len(c.get("view_frames", [])) for c in ctx.captures)
-                            row["visual_capture_status"] = "needs_review" if not row["capture_errors"] else "capture_incomplete"
+                            row["visual_capture_status"] = ("not_requested" if args.view_mode == "none" else
+                                "needs_review" if not row["capture_errors"] else "capture_incomplete")
                             if ctx.evidence_cameras.contaminated or ctx.evidence_cameras.unhealthy:
                                 row["native_observation_status"] = row["status"]
                                 row["status"] = "inconclusive"
@@ -252,6 +279,12 @@ def main(argv=None) -> int:
                     rows.append({k: value for k, value in row.items() if k not in {"observation", "traceback"}})
                     write_json(out / "summary.json", summarise(rows, selected, metadata))
                     print(f"{case.case_id} {scene}: {row['status']} ({row['elapsed_wall_seconds']:.1f}s)", flush=True)
+                    if row.get("error"):
+                        print(f"  STOP: {row['error']}", flush=True)
+                    for check in row.get("checks", []):
+                        values = log_check_values(check.get("detail"))
+                        print(f"  CHECK {'PASS' if check.get('passed') else 'FAIL'}: {check['name']}"
+                              + (f" | {json.dumps(values, ensure_ascii=False)}" if values else ""), flush=True)
                     if (case.fact_id in {"F9", "F11"} or (ctx is not None and (
                             ctx.evidence_cameras.unhealthy or ctx.evidence_cameras.contaminated))) and session is not None:
                         # These probes manipulate auto-simulation. A fresh
