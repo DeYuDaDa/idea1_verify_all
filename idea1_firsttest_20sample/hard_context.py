@@ -4,17 +4,20 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-from interactions import Interactions
+from hard_navigation import HardInteractions, NativeNavigator
 from mechanism_probe_common import native_temperature
 from hard_scenarios import HardConstructionError
 
 
 class HardContext:
-    def __init__(self, session, out_dir, *, seed=17, on_start_history=None, on_phase=None):
+    def __init__(self, session, out_dir, *, seed=17, on_start_history=None, on_identity_history=None, on_phase=None):
         self.session = session
         self.out = Path(out_dir)
         self.out.mkdir(parents=True, exist_ok=True)
-        self.ops = Interactions(session, seed=seed)
+        self.navigation_attempts = []
+        self.navigator = NativeNavigator(self)
+        self.ops = HardInteractions(self, seed=seed)
+        self.target_frozen = False
         self.roles = {}
         self.waypoints = {}
         self.questions = []
@@ -29,6 +32,7 @@ class HardContext:
         self.history_started = False
         self.public_phase = False
         self.on_start_history = on_start_history
+        self.on_identity_history = on_identity_history
         self.on_phase = on_phase
         self.trace = None
         self.case_id = self.group_id = self.family = ""
@@ -86,6 +90,17 @@ class HardContext:
         if self.trace:
             self.trace.set_role_ids(self.roles)
             self.trace.capture_current("公开初态")
+        if self.on_identity_history:
+            self.on_identity_history(self)
+
+    def navigate_to(self, alias_or_id, purpose="inspect"):
+        if alias_or_id in self.waypoints:
+            waypoint = self.waypoints[alias_or_id]
+            object_id = waypoint.get("objectId") if isinstance(waypoint, dict) else waypoint
+        else:
+            object_id = self.roles.get(alias_or_id, alias_or_id)
+        self.require(not self.target_frozen, "Navigation is forbidden inside the frozen target event")
+        return self.navigator.navigate(object_id, purpose)
 
     def step(self, action, **kwargs):
         result = self.session.step(action, raise_on_failure=True, **kwargs)

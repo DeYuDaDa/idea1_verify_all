@@ -133,6 +133,30 @@ class FullStepTraceTests(unittest.TestCase):
             self.assertEqual(len(trace.runs), 2)
             trace.finish()
 
+    def test_capture_groups_deduplicate_only_complete_synchronized_view_sets(self):
+        session = make_session(make_event(0, [np.full((2, 3, 3), 9, dtype=np.uint8)]))
+        session.controller.last_event.metadata["thirdPartyCameras"] = [{"thirdPartyCameraId": 0}]
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = FullStepTrace(session, temporary)
+            trace.set_cameras([{"camera_id": 0, "view_id": "distant_overview",
+                                "purpose": "distant_room_overview"}])
+            trace.set_phase("public history", public=True)
+            # Agent is unchanged while the overview changes: retain this whole
+            # timestep as a distinct synchronized group.
+            for agent, overview in ((0, 9), (0, 8), (0, 8)):
+                session.controller.next_event = make_event(agent, [np.full((2, 3, 3), overview, dtype=np.uint8)])
+                session.controller.next_event.metadata["thirdPartyCameras"] = [{"thirdPartyCameraId": 0}]
+                session.step("Pass")
+            index = trace.finish()
+            groups = index["capture_groups"]
+            self.assertEqual([g["run_length"] for g in groups], [1, 2])
+            self.assertEqual([v["view_id"] for v in groups[0]["views"]], ["agent", "distant_overview"])
+            self.assertEqual(groups[0]["views"][0]["pixel_sha256"], groups[1]["views"][0]["pixel_sha256"])
+            self.assertNotEqual(groups[0]["views"][1]["pixel_sha256"], groups[1]["views"][1]["pixel_sha256"])
+            self.assertEqual(len(index["model_frames"]), 2)
+            self.assertTrue(all(frame["view_id"] == "agent" for frame in index["model_frames"]))
+            self.assertFalse(any("distant_overview" in str(frame) for frame in index["model_frames"]))
+
     def test_observer_exception_does_not_mask_native_error(self):
         session = make_session()
         def bad_observer(_result):

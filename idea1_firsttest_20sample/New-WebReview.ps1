@@ -34,6 +34,38 @@ function Safe-Path([string]$Root,[string]$Relative,[string]$Boundary) {
     if(-not $path.StartsWith($allowed,[StringComparison]::OrdinalIgnoreCase)-or -not(Test-Path -LiteralPath $path -PathType Leaf)){return $null}
     return $path
 }
+function Export-ReviewAsset([string]$Path,$AssetMap,[string]$OutputRoot) {
+    if(-not $Path){return [ordered]@{src=$null;sha256=$null}}
+    $digest=Add-Source $Path
+    if(-not $AssetMap.ContainsKey($digest)){
+        $extension=[IO.Path]::GetExtension($Path).ToLowerInvariant();if($extension -notin @('.png','.jpg','.jpeg','.webp')){throw "Unsupported review image: $Path"}
+        $relative="assets/$digest$extension";$target=Join-Path $OutputRoot $relative;[IO.File]::Copy($Path,$target,$false)
+        if((Hash $target)-ne $digest){throw "Review image copy SHA mismatch: $Path"};$AssetMap[$digest]=$relative
+    }
+    return [ordered]@{src=$AssetMap[$digest];sha256=$digest}
+}
+function Export-CaptureGroups($Groups,[string]$TimelineRoot,[string]$TimelinePath,$AssetMap,[string]$OutputRoot) {
+    $exported=[System.Collections.Generic.List[object]]::new()
+    foreach($group in @($Groups)){
+        $views=[System.Collections.Generic.List[object]]::new()
+        foreach($view in @(Value $group 'views' @())){
+            $relative=[string](Value $view 'path' '');$resolved=$null
+            if($relative){
+                if([IO.Path]::IsPathRooted($relative)){throw "Capture-group image path is rooted: $TimelinePath"}
+                $candidate=[IO.Path]::GetFullPath((Join-Path $TimelineRoot $relative));$prefix=[IO.Path]::GetFullPath($TimelineRoot).TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar
+                if(-not $candidate.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){throw "Capture-group image escapes the case sidecar directory: $TimelinePath"}
+                if(Test-Path -LiteralPath $candidate -PathType Leaf){$resolved=$candidate}
+            }
+            $asset=Export-ReviewAsset $resolved $AssetMap $OutputRoot
+            $webView=[ordered]@{view_id=Value $view 'view_id' '';view_role=Value $view 'view_role' '';purpose=Value $view 'purpose' '';status=Value $view 'status' '';src=$asset.src;sha256=$asset.sha256}
+            $views.Add($webView)
+        }
+        $webGroup=[ordered]@{capture_group_index=Value $group 'capture_group_index' (Value $group 'global_step' $null);global_step=Value $group 'global_step' $null;reset_index=Value $group 'reset_index' $null;phase_id=Value $group 'phase_id' $null;phase_label=Value $group 'phase_label' '';phase_public=Value $group 'phase_public' $false;phase_kind=Value $group 'phase_kind' '';frame_status=Value $group 'frame_status' '';run_length=Value $group 'run_length' $null;duplicate_count=Value $group 'duplicate_count' $null;start_step=Value $group 'start_step' $null;end_step=Value $group 'end_step' $null;step_numbers=@(Value $group 'step_numbers' @());views=$views.ToArray()}
+        if($group -is [Collections.IDictionary] -and $group.Contains('step_group_map')){$webGroup.step_group_map=$group.step_group_map}
+        $exported.Add($webGroup)
+    }
+    return ,$exported.ToArray()
+}
 $output=[System.IO.Path]::GetFullPath($OutputRoot).TrimEnd('\','/')
 if(Test-Path -LiteralPath $output){throw "Output exists; existing reviews will not be overwritten: $output"}
 $sources=@($SourceRoot|ForEach-Object{[System.IO.Path]::GetFullPath($_).TrimEnd('\','/')})
@@ -134,7 +166,8 @@ for($bi=0;$bi -lt $sources.Count;$bi++){
                     if($privatePath){$privateHash=Add-Source $privatePath;if(-not $assets.ContainsKey($privateHash)){$ext=[IO.Path]::GetExtension($privatePath).ToLowerInvariant();if($ext -notin @('.png','.jpg','.jpeg','.webp')){throw "Unsupported audit image: $privatePath"};$relative="assets/$privateHash$ext";$target=Join-Path $output $relative;[IO.File]::Copy($privatePath,$target,$false);if((Hash $target)-ne $privateHash){throw "Audit image copy SHA mismatch: $privatePath"};$assets[$privateHash]=$relative};$privateFrame.src=$assets[$privateHash];$privateFrame.sha256=$privateHash}
                     $auditFrames.Add($privateFrame)
                 }
-                $auditTimeline=[ordered]@{frames=$auditFrames.ToArray();boundaries=@(Value $timeline 'boundaries' @());steps=@(Value $timeline 'steps' @())}
+                $auditGroups=Export-CaptureGroups @(Value $timeline 'capture_groups' @()) $timelineRoot $timelinePath $assets $output
+                $auditTimeline=[ordered]@{title=[string](Value $timeline 'title' '');frames=$auditFrames.ToArray();capture_groups=$auditGroups.ToArray();boundaries=@(Value $timeline 'boundaries' @());steps=@(Value $timeline 'steps' @())}
             }
             $items.Add([ordered]@{id="data/input/$($file.Name)";label=$sample;kind='dataset';model_input=$mi;frames=$frames.ToArray();media_quality=(RV-SummarizeMedia $frames.ToArray());references=$references.ToArray();request_origin=$origin;request_text=$request;request_run_status=$requestRunStatus;protocol=$protocol;audit_timeline=$auditTimeline})
         }
@@ -149,14 +182,26 @@ for($bi=0;$bi -lt $sources.Count;$bi++){
                 $publishedInputs=@(Value $attempt 'published_inputs' @());$failedStatus=$status -match '(?i)fail|error|exception|blocked|stopped|invalid|unsupported|timeout|cancel';$failedAttempt=($publishedInputs.Count -eq 0 -or $failedStatus)
                 if(-not $failedAttempt){continue}
                 $diagnosticCount++;$generationIncomplete=$true
-                $diagFrames=[System.Collections.Generic.List[object]]::new();$auditTimeline=$null;$timelineState='missing';$timelineRel="audit_traces/$caseId/review_timeline.json"
+                $diagFrames=[System.Collections.Generic.List[object]]::new();$auditTimeline=$null;$auditGroups=@();$timelineState='missing';$timelineRel="audit_traces/$caseId/review_timeline.json"
                 $timelinePath=Safe-Path $source $timelineRel (Join-Path $source 'audit_traces')
                 if($timelinePath){
                     $timeline=Read-Json $timelinePath;$null=Add-Source $timelinePath;$timelineRoot=Split-Path -Parent $timelinePath
                     if([string](Value $timeline 'sample_id' '') -eq $caseId){
-                        $timelineState='available';$privateFrames=@(Value $timeline 'frames' @())
-                        if(-not $privateFrames.Count){$generationIncomplete=$true;$timelineState='no_frames'}
-                        foreach($tf in $privateFrames){
+                        $timelineState='available';$captureGroups=@(Value $timeline 'capture_groups' @());$privateFrames=@(Value $timeline 'frames' @())
+                        if($captureGroups.Count){
+                            $auditGroups=Export-CaptureGroups $captureGroups $timelineRoot $timelinePath $assets $output
+                            foreach($group in $captureGroups){foreach($view in @(Value $group 'views' @())){
+                                if([string](Value $view 'view_id' '') -ne 'agent'){continue}
+                                $relativeFrame=[string](Value $view 'path' '');$mediaStatus='invalid_path';$mediaMessage='agent 视角图像路径无效或越出本次尝试目录。';$resolvedFrame=$null
+                                if($relativeFrame -and -not [IO.Path]::IsPathRooted($relativeFrame)){$candidate=[IO.Path]::GetFullPath((Join-Path $timelineRoot $relativeFrame));$prefix=[IO.Path]::GetFullPath($timelineRoot).TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar;if($candidate.StartsWith($prefix,[StringComparison]::OrdinalIgnoreCase)){if(Test-Path -LiteralPath $candidate -PathType Leaf){$resolvedFrame=$candidate;$mediaStatus='available';$mediaMessage=''}else{$mediaStatus='file_missing';$mediaMessage='agent 视角图像文件缺失。';$generationIncomplete=$true}}}
+                                $info=[ordered]@{source_path=$relativeFrame;source_status=$mediaStatus;source_error='';source_message=$mediaMessage;observation_contaminated=$false}
+                                $frame=Frame $resolvedFrame ([string](Value $group 'phase_label' '')) $info
+                                foreach($key in @('run_length','duplicate_count','start_step','end_step','capture_group_index')){$frame[$key]=Value $group $key $null};$frame.view_id='agent';$diagFrames.Add($frame)
+                            }}
+                            if(-not $diagFrames.Count){$generationIncomplete=$true;$timelineState='no_agent_frames'}
+                        }else{
+                          if(-not $privateFrames.Count){$generationIncomplete=$true;$timelineState='no_frames'}
+                          foreach($tf in $privateFrames){
                             $relativeFrame=[string](Value $tf 'path' '');$mediaStatus='invalid_path';$mediaMessage='审计帧路径无效或越出本次尝试目录。';$resolvedFrame=$null
                             if($relativeFrame -and -not [IO.Path]::IsPathRooted($relativeFrame)){
                                 $candidate=[IO.Path]::GetFullPath((Join-Path $timelineRoot $relativeFrame));$prefix=[IO.Path]::GetFullPath($timelineRoot).TrimEnd('\','/')+[IO.Path]::DirectorySeparatorChar
@@ -168,12 +213,13 @@ for($bi=0;$bi -lt $sources.Count;$bi++){
                             $frame=Frame $resolvedFrame ([string](Value $tf 'stage' '')) $info
                             foreach($key in @('run_length','duplicate_count','start_step','end_step','view_id')){$frame[$key]=Value $tf $key $null}
                             $diagFrames.Add($frame)
+                          }
                         }
-                        $auditTimeline=[ordered]@{frames=@();boundaries=@(Value $timeline 'boundaries' @());steps=@(Value $timeline 'steps' @())}
+                        $auditTimeline=[ordered]@{title=[string](Value $timeline 'title' '');frames=@();capture_groups=$auditGroups;boundaries=@(Value $timeline 'boundaries' @());steps=@(Value $timeline 'steps' @())}
                     }else{$timelineState='sample_id_mismatch';$generationIncomplete=$true}
                 }else{$generationIncomplete=$true}
                 if(-not $attemptError){$attemptError=if($status){"生成状态：$status；该尝试没有发布正式题目。"}else{'该尝试没有发布正式题目。'}}
-                $items.Add([ordered]@{id="diagnostic/$caseId/$ai";label="$caseId / $scene / 未发布尝试 $($ai+1)";kind='diagnostic';case_id=$caseId;scene=$scene;status=$status;error=$attemptError;timeline_status=$timelineState;frames=$diagFrames.ToArray();audit_timeline=$auditTimeline;media_quality=(RV-SummarizeMedia $diagFrames.ToArray())})
+                $items.Add([ordered]@{id="diagnostic/$caseId/$ai";label="$caseId / $scene / 未发布尝试 $($ai+1)";kind='diagnostic';case_id=$caseId;scene=$scene;status=$status;error=$attemptError;planned_next_steps=@(Value $attempt 'planned_next_steps' (Value $attempt 'planned_actions' @()));timeline_status=$timelineState;frames=$diagFrames.ToArray();audit_timeline=$auditTimeline;media_quality=(RV-SummarizeMedia $diagFrames.ToArray())})
             }
         }
     }elseif(Test-Path -LiteralPath (Join-Path $source 'observations/attempts')){
@@ -203,6 +249,7 @@ for($bi=0;$bi -lt $sources.Count;$bi++){
     $batch=[ordered]@{schema='scene-review-batch/v1';id=$batchId;name=$name;items=$items.ToArray()};if($mode -eq 'Mechanism'){$batch['review_revision']='scene-v2'};$batches.Add($batch)
     $questions=0;if($mode -eq 'Dataset'){foreach($item in $items){if($item.kind -eq 'dataset'){$questions+=@(Value $item.model_input 'questions' @()).Count}}}
     $allFrames=@(foreach($item in $items){foreach($frame in $item.frames){$frame}});$quality=RV-SummarizeMedia $allFrames
+    $batch['source_media_status']=if($generationIncomplete -or $quality.issue_items -gt 0){'source_incomplete'}else{'media_present_not_visually_approved'}
     $invalidNative=@($items|Where-Object{(Value $_ 'native_measurement_valid') -eq $false}).Count
     $preparedInBatch=@($items|Where-Object{[string](Value $_ 'request_origin' '') -eq 'prepared'}).Count;$formalRecords=@($items|Where-Object{[string](Value $_ 'kind' '') -ne 'diagnostic'}).Count
     $reports.Add([ordered]@{name=$name;mode=$mode;batch_id=$batchId;source_root=$source;records=$formalRecords;diagnostic_attempts=$diagnosticCount;generation_incomplete=$generationIncomplete;questions=$questions;prepared_requests=$preparedInBatch;image_references=$imageCount;missing_images=$missing;invalid_native_measurements=$invalidNative;media_quality=$quality})

@@ -14,10 +14,13 @@ from pathlib import Path
 from full_step_trace import FullStepTrace
 from hard_camera import CameraPreflightError, audit_fixed_views, configure_evidence_cameras
 from hard_context import HardContext
+from hard_navigation import NavigationUnavailable
+from hard_scene_survey import survey_scenes
 from hard_contracts import validate_instance_contract
 from hard_export import NativeMeasurementUnavailable, export_case, public_roles, sha_file, write_audit_timeline, write_json
 from hard_scenarios import HardConstructionError, cases
-from observation_views import mask_presence, world_state
+from observation_views import world_state
+from interactions import Interactions
 from runtime import ControllerSession
 
 
@@ -66,20 +69,31 @@ def plan(selected):
     }
 
 
-def _initial_anchors(ctx, camera_report):
-    event = ctx.session.controller.last_event
-    targets = {a: ctx.roles[a] for a in public_roles(ctx)}
-    best = {}
-    for view in camera_report.get("selected_views", []):
-        presence = mask_presence(event, view["camera_id"], targets)
-        for alias, item in presence.get("roles", {}).items():
-            bbox = item.get("bbox")
-            if bbox and item.get("framing_presence") and item["pixels"] > best.get(alias, {}).get("pixels", -1):
-                best[alias] = {"alias": alias, "view_id": view["view_id"], "pixels": item["pixels"],
-                               "pixel_bbox": [bbox["x"], bbox["y"], bbox["x"] + bbox["width"],
-                                              bbox["y"] + bbox["height"]]}
-    ctx.require(set(targets) == set(best), "Initial images do not ground every public object identity")
-    return [{k: v for k, v in item.items() if k != "pixels"} for item in best.values()]
+def _identity_history(ctx):
+    """Bind public aliases in actual first-person frames, across a native tour."""
+    from runtime import StepResult
+    ctx.require(not ctx.session.inventory(), "Initial identity tour requires an empty hand")
+    baseline = world_state(ctx.session.snapshot())["objects"]
+    anchors = []
+    for alias in public_roles(ctx):
+        ctx.phase(f"公开初态身份巡视：{alias}", public=True, kind="history")
+        ctx.navigate_to(alias, "initial_first_person_identity")
+        event = ctx.session.controller.last_event
+        bbox = Interactions._rendered_target_bbox(StepResult(event, ctx.session.snapshot(), {}), ctx.roles[alias])
+        ctx.require(bbox is not None, f"First-person initial identity is not visible: {alias}")
+        row = ctx.trace.capture_current(f"第一人称身份确认：{alias}")
+        anchors.append({"alias": alias, "view_id": "agent",
+                        "initial_capture_group_index": row["global_step"],
+                        "pixel_bbox": [bbox["x"], bbox["y"], bbox["x"] + bbox["width"],
+                                       bbox["y"] + bbox["height"]]})
+    ctx.initial_identity_regions = anchors
+    actual = world_state(ctx.session.snapshot())["objects"]
+    changed = [alias for alias in public_roles(ctx)
+               if baseline.get(ctx.roles[alias]) != actual.get(ctx.roles[alias])]
+    ctx.check("identity_tour_preserves_task_state", not changed, {"changed_roles": changed})
+    ctx.require(not changed and not ctx.session.inventory(),
+                f"First-person identity tour changed task object state: {changed}")
+    write_json(ctx.out / "initial_identity_regions.json", anchors)
 
 
 def _preflight(ctx, trace):
@@ -112,7 +126,7 @@ def _preflight(ctx, trace):
                                  for a in public_roles(ctx) if ctx.obj(a).get("pickupable") is True}
     report = configure_evidence_cameras(ctx, trace, ctx.out / "camera_preflight")
     ctx.require(report.get("status") == "screened", f"Camera preflight rejected: {report.get('error')}")
-    ctx.initial_identity_regions = _initial_anchors(ctx, report)
+    ctx.initial_identity_regions = []  # Grounded later in the public agent-only tour.
     if ctx.group_id == "H03":
         mapping = []
         for knob in ("KA", "KB"):
@@ -125,13 +139,13 @@ def _preflight(ctx, trace):
     if ctx.group_id == "H05":
         ctx.require(ctx.obj("Z").get("isCooked") is False, "Initial potato must really be uncooked")
         ctx.public_declarations.append("公开历史起点：土豆Z未熟，温度为室温；后续熟度依据历史恢复。")
-    write_json(ctx.out / "initial_identity_regions.json", ctx.initial_identity_regions)
     trace.mark("真实实例与固定相机预检完成", kind="calibration_end")
 
 
 def _public_capture_errors(trace):
     return [r for r in trace.events if r.get("phase_public") and
-            (not r.get("new_event_received") or r.get("frame_status") != "captured")]
+            (not r.get("new_event_received") or r.get("frame_status") != "captured"
+             or r.get("action") in {"Teleport", "TeleportFull", "PlaceObjectAtPoint"})]
 
 
 def target_capture_diagnostics(ctx, trace):
@@ -185,7 +199,7 @@ def _quarantine_partial_exports(root, case_id, directory):
                 source.rename(target)
 
 
-def generate(selected, out, config, *, build_cache, executable=None, seed=17):
+def generate(selected, out, config, *, build_cache, executable=None, seed=17, scene_limit=30):
     out = Path(out).resolve()
     try:
         out.relative_to(HERE.parent)
@@ -211,18 +225,24 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17):
                 "source_sha256": {str(p.relative_to(HERE)): sha_file(p) for p in sources if p.is_file()},
                 "plan": plan(selected), "review_status": "pending_human_review"}
     write_json(out / "run_manifest.json", manifest)
+    platform = config.get("platform", "CloudRendering")
+    launch = controller_launch_options(platform, build_cache, executable)
+    survey = survey_scenes(selected, out, config, launch, scene_limit=scene_limit)
     rows = []
     for case in selected:
         directory = out / "audit_traces" / case.case_id
         session = trace = ctx = None
         started = time.monotonic()
-        row = {"case_id": case.case_id, "scene": case.scene, "title": case.title,
+        scene = survey["assignments"].get(case.group_id)
+        row = {"case_id": case.case_id, "scene": scene or case.scene, "title": case.title,
                "status": "not_started", "published_inputs": []}
         try:
-            platform = config.get("platform", "CloudRendering")
-            launch = controller_launch_options(platform, build_cache, executable)
-            session = ControllerSession(scene=case.scene, platform=platform,
+            if scene is None:
+                raise HardConstructionError(f"No surveyed native scene satisfied {case.group_id} inventory; "
+                                            "see inventory_survey.json. No duplicate object was fabricated.")
+            session = ControllerSession(scene=scene, platform=platform,
                         width=config.get("width", 640), height=config.get("height", 480),
+                        controller_kwargs={"snapToGrid": False},
                         **launch)
             trace = FullStepTrace(session, directory)
             trace.set_phase("初始化与原生搭建", public=False, kind="setup")
@@ -240,7 +260,8 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17):
                 trace.set_phase(label, public=public, kind=kind)
                 trace.mark(label + " 开始", kind="phase_begin")
             ctx = HardContext(session, directory, seed=seed, on_phase=phase,
-                              on_start_history=lambda context: _preflight(context, trace))
+                              on_start_history=lambda context: _preflight(context, trace),
+                              on_identity_history=_identity_history)
             ctx.case_id, ctx.group_id, ctx.family = case.case_id, case.group_id, case.family
             ctx.trace = trace
             case.run(ctx)
@@ -262,7 +283,7 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17):
             row["status"] = "candidate_pending_visual_review"
             row["capture_steps"] = index["global_step_count"]
             row["identical_frame_diagnostics"] = diagnostics
-        except (HardConstructionError, CameraPreflightError, NativeMeasurementUnavailable) as exc:
+        except (HardConstructionError, CameraPreflightError, NativeMeasurementUnavailable, NavigationUnavailable) as exc:
             row.update(status="construction_or_evidence_unavailable", error=str(exc), traceback=traceback.format_exc())
         except Exception as exc:
             row.update(status="execution_error", error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
@@ -287,6 +308,7 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17):
                     "initial_metadata": ctx.initial_metadata, "before_target": ctx.before_target,
                     "after_target": ctx.after_target, "model_called": False,
                     "measurement_issues": getattr(ctx, "measurement_issues", []),
+                    "navigation_attempts": ctx.navigation_attempts,
                 })
             if session:
                 try:
@@ -294,15 +316,19 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17):
                 except Exception as exc:
                     row["controller_stop_error"] = str(exc)
             row["elapsed_wall_seconds"] = round(time.monotonic() - started, 3)
+            row["last_phase"] = ctx.executed_phases[-1]["label"] if ctx and ctx.executed_phases else None
+            row["target_event_completed"] = bool(ctx and ctx.target_event.get("success") is True)
             rows.append(row)
             write_json(out / "generation_summary.json", {
                 "requested_cases": [c.case_id for c in selected], "attempts": rows,
                 "not_attempted_cases": [c.case_id for c in selected if c.case_id not in {r["case_id"] for r in rows}],
                 "published_case_count": sum(bool(r["published_inputs"]) for r in rows),
                 "published_input_count": sum(len(r["published_inputs"]) for r in rows),
+                "source_status": "candidates_pending_review" if len(rows) == len(selected)
+                    and all(r["published_inputs"] for r in rows) else "source_incomplete",
                 "model_called": False, "benchmark_ready": False,
             })
-        if session is None:
+        if session is None and scene is not None:
             break  # Infrastructure failure must not cause twenty repeated launches.
     return rows
 
@@ -318,8 +344,11 @@ def main(argv=None):
     p.add_argument("--build-cache-dir", type=Path)
     p.add_argument("--local-executable-path", type=Path)
     p.add_argument("--seed", type=int, default=17)
+    p.add_argument("--scene-limit", type=int, default=30)
     p.add_argument("--platform", choices=("CloudRendering", "Linux64"), default=None)
     args = p.parse_args(argv)
+    if not 1 <= args.scene_limit <= 30:
+        p.error("--scene-limit must be between 1 and 30")
     available = cases()
     ids = [c.case_id for c in available] if args.all else (args.cases or "H05-1").split(",")
     if len(ids) != len(set(ids)) or set(ids) - {c.case_id for c in available}:
@@ -343,7 +372,7 @@ def main(argv=None):
     if args.platform:
         config["platform"] = args.platform
     result = generate(selected, args.out, config, build_cache=args.build_cache_dir,
-                      executable=executable, seed=args.seed)
+                      executable=executable, seed=args.seed, scene_limit=args.scene_limit)
     for row in result:
         if not row["published_inputs"]:
             print(f"[hard_generate] {row['case_id']} {row['status']}: {row.get('error', 'no published input')}",

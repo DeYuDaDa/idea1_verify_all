@@ -38,7 +38,9 @@ function New-Fixture([string]$Name) {
     [IO.File]::WriteAllBytes((Join-Path $source 'audit_traces/H01-1/private.png'),$png)
     $timeline=[ordered]@{
         sample_id='H01-1'
+        title='受控嵌套移出场景'
         frames=@(@{path='private.png';stage='private-only-stage';run_length=2;duplicate_count=1;start_step=3;end_step=4;view_id='audit-view'})
+        capture_groups=@(@{capture_group_index=3;global_step=3;reset_index=0;phase_id=2;phase_label='目标事件后';phase_public=$false;phase_kind='event';frame_status='captured';run_length=2;duplicate_count=1;start_step=3;end_step=4;step_numbers=@(3,4);views=@(@{view_id='agent';view_role='agent_first_person';purpose='model_evidence';path='private.png';pixel_sha256='fixture-agent'},@{view_id='overview';view_role='third_party';purpose='distant_room_overview';path='private.png';pixel_sha256='fixture-overview'})})
         boundaries=@(@{step_index=3;label='PRIVATE_BOUNDARY_LABEL';kind='target-event'})
         steps=@('PRIVATE_ACTION_TEXT')
     }
@@ -128,13 +130,16 @@ try {
     Assert ($s.protocol -eq 'hard-selective-S/v1' -and $s.frames.Count -eq 0) 'frozen S protocol should accept zero public frames'
     Assert ($s.media_quality.issue_items -eq 0) 'intentional no-image S input must not be called source_incomplete'
     Assert ($s.audit_timeline.frames[0].stage -eq 'private-only-stage' -and $s.audit_timeline.steps[0] -eq 'PRIVATE_ACTION_TEXT') 'private timeline and raw steps should be available in the collapsed audit payload'
+    Assert ($s.audit_timeline.title -eq '受控嵌套移出场景' -and $s.audit_timeline.capture_groups[0].views.Count -eq 2) 'scene title and synchronized views must survive private timeline export as one group'
+    Assert ($s.audit_timeline.capture_groups[0].global_step -eq 3 -and $s.audit_timeline.capture_groups[0].views[1].view_role -eq 'third_party') 'same-timestep group and view role metadata must be preserved'
     Assert ($s.model_input.history[0].stage -eq 'public-history') 'private timeline must not replace or remove the complete public model_input'
     $manifest=Get-Content -LiteralPath (Join-Path $valid.output 'site_manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json -AsHashtable
     Assert ($manifest.source_media_status -eq 'media_present_not_visually_approved') 'intentional S no-image status must not mark the batch incomplete'
     $html=Get-Content -LiteralPath (Join-Path $valid.output 'index.html') -Raw -Encoding UTF8
     $js=Get-Content -LiteralPath (Join-Path $valid.output 'review.js') -Raw -Encoding UTF8
     Assert (-not $html.Contains('PRIVATE_ACTION_TEXT') -and -not $html.Contains('PRIVATE_BOUNDARY_LABEL')) 'private audit labels must not be embedded in the default HTML'
-    Assert ($js.Contains("el('details')") -and $js.Contains('完整私有采集轨迹（不属于模型输入）')) 'private timeline must be rendered as a collapsed details section, not default page content'
+    Assert ($js.Contains("el('details')") -and $js.Contains('私有同步时间线与全程采集（不属于模型输入）')) 'private timeline must be rendered separately from the model-visible input'
+    Assert ($js.Contains('S 是有意设置的纯文本状态诊断') -and $js.Contains('capture-views') -and $js.Contains('V 视觉证据 · 主审候选')) 'reviewer must explain S text-only intent, V priority, and synchronized grouped views'
 
     $allFailed=New-FailureOnlyFixture 'all-failed-generation'
     Invoke-Review $allFailed
@@ -146,6 +151,8 @@ try {
     Assert ($failedBatch.items.Count -eq 1 -and $failedManifest.batches[0].records -eq 0 -and $failedManifest.batches[0].diagnostic_attempts -eq 1) 'all-failed batch should render a diagnostic while keeping formal record count at zero'
     Assert ($failedManifest.source_media_status -eq 'source_incomplete' -and $failureItem.timeline_status -eq 'available') 'unpublished cases must mark the batch incomplete while retaining available native frames'
     Assert ($failureItem.error -eq 'native construction failed' -and $failureItem.frames[0].src) 'diagnostic page should show the failure and its available sidecar frame'
+    Assert ($failureItem.frames.Count -eq 1 -and $failureItem.frames[0].view_id -eq 'agent') 'failed-attempt image strip must contain only the agent view, while synchronized debug views stay grouped below'
+    Assert ($failureItem.audit_timeline.capture_groups.Count -eq 1 -and $failureItem.audit_timeline.capture_groups[0].views.Count -eq 2) 'failed attempts must preserve same-timestep synchronized groups and all private views'
     Assert (-not $failureItem.Contains('model_input') -and -not $failureItem.Contains('request_text') -and -not $failureItem.Contains('references')) 'failed attempts must not become formal model questions, requests, or Gold rows'
 
     $missingFilm=New-FailureOnlyFixture 'all-failed-missing-film'

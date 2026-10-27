@@ -47,7 +47,7 @@
     for(const q of filtered()) {
       const e = entry(q.key), button = el('button'); button.type = 'button'; button.setAttribute('aria-current',String(q === selected));
       button.append(el('span',symbols[e.status],`status-symbol ${e.status}`));
-      const label = el('span',q.item.presentation?.title || q.item.label,'label'); label.append(el('small',q.item.kind === 'dataset' ? `${q.item.label} · ${q.id}` : q.item.label)); if(q.item.kind==='diagnostic')label.append(el('small','失败诊断 · 未发布正式题目'));if(q.item.request_origin==='prepared')label.append(el('small','待发送 · 尚未调用模型'));const bad=mediaIssues(q.item).length;if(bad)label.append(el('small',`图片来源异常 ${bad} 项`));button.append(label);
+      const label = el('span',q.item.presentation?.title || q.item.label,'label'); label.append(el('small',q.item.kind === 'dataset' ? `${q.item.label} · ${q.id}` : q.item.label)); if(q.item.kind==='diagnostic')label.append(el('small','失败诊断 · 未发布正式题目'));if(q.item.request_origin==='prepared')label.append(el('small','待发送 · 尚未调用模型'));const bad=mediaIssues(q.item).length;if(bad)label.append(el('small',`图片来源异常 ${bad} 项`));if(q.item.protocol==='hard-selective-V/v1')label.append(el('small','V 视觉证据 · 主审候选'));if(q.item.protocol==='hard-selective-S/v1')label.append(el('small','S 文本状态诊断 · 配对对照'));button.append(label);
       button.addEventListener('click',() => choose(q)); nav.append(button);
     }
     const counts = {pending:0,pass:0,reject:0}; for(const q of questions) counts[entry(q.key).status]++;
@@ -76,7 +76,7 @@
   }
   function drawImages(item) {
     $('images').replaceChildren();
-    $('image-title').textContent = item.kind === 'dataset' ? '模型看到的图片（原顺序）' : item.kind==='diagnostic' ? '本次生成尝试的诊断采集画面（不属于模型输入）' : '候选图片与每张图的用途（原顺序）';
+    $('image-title').textContent = item.kind === 'dataset' ? '模型看到的图片（原顺序）' : item.kind==='diagnostic' ? 'agent 主视角诊断采集（不属于模型输入）；同步调试视角见下方分组时间线' : '候选图片与每张图的用途（原顺序）';
     const available=item.frames.filter(f=>!!f.src).length;
     $('image-count').textContent = item.protocol==='hard-selective-S/v1' ? '本条件为文本状态诊断，不提供图像；全过程画面仅在下方私有审计区查看' : `${available} 张可查看 / ${item.frames.length} 个画面项 · 点击看原图`;
     item.frames.forEach((frame,i) => {
@@ -101,7 +101,7 @@
       }
       const text=el('figcaption',caption);if(note?.process)text.append(el('span',note.process,'frame-process'));if(identityRegions.length)text.append(el('span','初态身份框仅辅助显示输入文本中已有的定位信息，原图未修改。','identity-caption'));figure.append(text);$('images').append(figure);
     });
-    if(!item.frames.length) $('images').append(el('div',item.protocol==='hard-selective-S/v1'?'本条件有意不提供图像；逐步采集画面保存在下方折叠的私有审计区。':item.kind==='diagnostic'?'该次失败尝试没有保留下来可显示的采集帧。':'此记录没有截图。',item.protocol==='hard-selective-S/v1'?'':'missing'));
+    if(!item.frames.length) $('images').append(el('div',item.protocol==='hard-selective-S/v1'?'本条件有意不提供图像；S 是文本状态诊断。请勿把私有审计画面当作模型输入。':item.kind==='diagnostic'?`本次尝试在“${item.scene||'未标注阶段'}”停止，状态：${item.status||'未记录'}。${item.error||'未记录具体失败原因。'}${item.timeline_status==='missing'?' 原生时间线缺失，无法确认更具体的停止步骤。':item.timeline_status==='no_frames'?' 已找到时间线，但没有可显示的原生帧。':' 请在下方诊断记录核对停止点及未完成的预定后续步骤。'}`:'此记录没有截图。',item.protocol==='hard-selective-S/v1'?'':'missing'));
   }
   function validIdentityRegion(region) {
     const box=region?.pixel_bbox;
@@ -138,6 +138,26 @@
     $('raw-presentation').textContent=json(p);
     $('raw-panel').open=false;
   }
+  function drawHardContext(item,q) {
+    document.getElementById('hard-context')?.remove();
+    if(item.kind!=='dataset'||!item.protocol?.startsWith('hard-selective-'))return;
+    const mi=item.model_input||{}, card=el('section');card.id='hard-context';card.className='hard-context';
+    const isS=item.protocol==='hard-selective-S/v1';
+    card.append(el('h2',isS?'S 条件：文本状态诊断':'V 条件：视觉证据主审'));
+    const objects=(mi.objects||[]).map(o=>`${o.alias}（${o.object_type||'对象'}）`).join('、');
+    const state=(mi.state_before_event||[]).length?mi.state_before_event:(mi.initial_state_declarations||[]);
+    const describe=x=>typeof x==='string'?x:`${x.subject||'?'} · ${x.predicate||'?'} = ${typeof x.value==='string'?x.value:json(x.value)}`;
+    card.append(el('p',`场景：${item.audit_timeline?.title||item.label.replace(/_[VS]$/,'')}。参与对象：${objects||'冻结输入未列出对象'}。`));
+    card.append(el('p',`事件前状态：${state.length?state.map(describe).join('；'):'冻结输入未提供结构化事件前状态'}。`));
+    const event=mi.event||{};
+    card.append(el('p',isS?`目标事件：${event.action||'未记录'}；主体 ${event.subject||'未记录'}；${event.destination?`放置目标 ${event.destination}；`:''}${event.success===true?'记录为成功':event.success===false?'记录为失败':'成功状态未记录'}。`:`目标事件：${event.source||'按冻结视觉输入确定'}。`));
+    card.append(el('p',`当前问题：${q.text||q.question||'未记录问题'}${q.fact_id?`（${q.fact_id}）`:''}`));
+    const agentOnly=(mi.frames||[]).every(f=>f.view_id==='agent');
+    card.append(el('p',isS?'S 是有意设置的纯文本状态诊断：模型输入确实没有图像，也没有历史；下方“精确模型输入”保留冻结文本。私有逐步画面仅供审计，不能算作 S 的模型证据。':agentOnly?'V 是视觉证据主审：上方按模型顺序展示 agent 视角图像；同一时刻的其他视角只在私有同步时间线上用于审核，不能视作模型看过的画面。':'这是旧版多视角 V 输入，公开画面包含第三方视角，不能视为新版纯第一人称数据。原始冻结输入仍完整保留；需重新生成才能满足新的视角要求。'));
+    const pair=current?.items?.find(x=>x!==item&&x.kind==='dataset'&&x.label.replace(/_[VS]$/,'')===item.label.replace(/_[VS]$/,''));
+    if(pair){const link=el('button',`打开配对 ${pair.protocol==='hard-selective-V/v1'?'V 视觉条件':'S 文本状态诊断'}：${pair.label}`);link.type='button';link.className='pair-link';link.addEventListener('click',()=>{const target=questions.find(row=>row.item===pair);if(target)choose(target);});card.append(link);}
+    $('question').parentElement.parentElement.insertAdjacentElement('afterend',card);
+  }
   function choose(q) {
     selected=q; $('empty').hidden=true;$('detail').hidden=false;
     const item=q.item, isDataset=item.kind==='dataset', isDiagnostic=item.kind==='diagnostic', p=item.presentation;
@@ -145,6 +165,8 @@
     $('question').textContent=q.text;
     $('decision-title').textContent=isDiagnostic?'这条失败尝试的采集记录是否可读？':isDataset?'这题是否可用？':p?'这条候选题的场景与图片是否足够？':'这组诊断截图是否清楚？';
     $('question-extra').textContent=isDiagnostic ? `case_id: ${item.case_id} · 场景: ${item.scene||'未记录'} · 状态: ${item.status||'未记录'}\n失败原因：${item.error||'没有记录具体原因。'}${item.timeline_status==='missing'?'\n没有找到对应的原生采集时间线。':item.timeline_status==='no_frames'?'\n找到时间线，但没有可用帧。':item.timeline_status==='sample_id_mismatch'?'\n时间线中的 case_id 与本次失败尝试不一致。':''}` : isDataset ? `${q.subject} · ${q.predicate} · answer_mode: ${q.answer_mode}${item.questions.length>1?'\n本次请求共 '+item.questions.length+' 题；下方保留完整输入，未删去其他题。':''}` : p?'下面先说明完整过程，再逐张核对所需证据。':'此条尚缺具体场景说明，请先生成说明包。';
+    if(isDiagnostic){const logged=(item.audit_timeline?.steps||[]).filter(s=>s&&typeof s==='object'&&(s.action||s.capture_label));const last=logged.at(-1);const planned=item.planned_next_steps||[];$('question-extra').textContent+=`\n停止位置：${last?`${last.phase_label||''}${last.action?` · ${last.action}`:''}${last.capture_label?` · ${last.capture_label}`:''}`:'没有可确认的最后记录步骤'}。\n预定后续步骤：${planned.length?planned.map(x=>typeof x==='string'?x:json(x)).join('；'):'生成记录未提供预定后续步骤，不能据设计预期补写。'}`;}
+    drawHardContext(item,q);
     $('boundary').className='boundary'+(isDataset?'':' warning');
     $('boundary').textContent=isDiagnostic ? '这是生成失败诊断，不是已发布题目；没有模型请求、正式问题或 Gold。下方图片仅用于查看本次尝试保留下来的采集证据。' : isDataset ? (item.request_origin==='prepared'?'逐字冻结的待发送输入，且对应公开记录与图片哈希均匹配。状态为 prepared_not_sent：尚未调用模型。':item.request_origin==='recorded'?'已有本次运行保存的请求文本；图片按保存的公开输入顺序排列。':'此旧批次未保存最终请求文本。下方按当前 runner 重建，不能视为历史逐字原文。') : '本批次没有调用模型，没有 prompt 或正式问题。以下只审核诊断截图，不能据此批准一条正式模型题。';
     if(p)$('boundary').textContent=p.draft_warning;
@@ -158,8 +180,9 @@
     const issues=mediaIssues(item), generated=issues.filter(f=>f.source_status==='generation_failed').length;
     const invalidNative=item.native_measurement_valid===false;
     const missingDiagnosticFilm=isDiagnostic&&(!item.frames.length||item.timeline_status!=='available');
-    $('media-warning').hidden=!issues.length&&!invalidNative&&!missingDiagnosticFilm;
-    $('media-warning').textContent=(issues.length?`源数据图片不完整：本条 ${issues.length} 个画面项异常${generated?`，其中 ${generated} 项为服务器未能生成/采纳图片`:''}。重建网页不能补出未生成的图。`:'')+(missingDiagnosticFilm?' 生成失败诊断缺少完整原生采集时间线或帧，批次已标记为 source_incomplete。':'')+(invalidNative?' 本条原生机制测量也被运行记录标记为无效，不能采用这里的结果作为机制标准答案。':'');
+    const intentionalS=isDataset&&item.protocol==='hard-selective-S/v1';
+    $('media-warning').hidden=!issues.length&&!invalidNative&&!missingDiagnosticFilm&&!intentionalS;
+    $('media-warning').textContent=(intentionalS?'S 条件按设计不含图像；这是文本状态诊断，不表示采集故障。':'')+(issues.length?`源数据图片不完整：本条 ${issues.length} 个画面项异常${generated?`，其中 ${generated} 项为服务器未能生成/采纳图片`:''}。重建网页不能补出未生成的图。`:'')+(missingDiagnosticFilm?' 生成失败诊断缺少完整原生采集时间线或帧，批次已标记为 source_incomplete。':'')+(invalidNative?' 本条原生机制测量也被运行记录标记为无效，不能采用这里的结果作为机制标准答案。':'');
     drawScenario(item);
     if(isDiagnostic){
       $('raw-panel').hidden=false;$('raw-panel').open=false;
@@ -202,10 +225,29 @@
     document.getElementById('private-audit')?.remove();
     if(!item.audit_timeline)return;
     const details=el('details');details.id='private-audit';details.className='private-audit';
-    details.append(el('summary','完整私有采集轨迹（不属于模型输入）'));
+    details.append(el('summary',item.protocol?.startsWith('hard-selective-')?'私有同步时间线与全程采集（不属于模型输入）':'完整私有采集轨迹（不属于模型输入）'));
     details.append(el('p','这里保留准备/校准、公开历史、目标事件和观察窗口的过程标记、逐步动作记录及精确去重信息。默认折叠；不得将这些私有动作转录当作 V 条件的模型可见历史。'));
     const timeline=item.audit_timeline;
-    for(const [i,frame] of (timeline.frames||[]).entries()) {
+    details.open=!!((item.protocol?.startsWith('hard-selective-')||item.kind==='diagnostic')&&(timeline.capture_groups||[]).length);
+    if((timeline.capture_groups||[]).length){
+      details.append(el('h3','同步视角 · 按同一时刻成组展示'));
+      details.append(el('p','每张卡片对应同一全局步的同步采集。左右并列视角不是连续视频帧；只有 agent 视角属于 V 的模型输入，其余视角仅供人工审计。'));
+      for(const [i,group] of timeline.capture_groups.entries()){
+        const section=el('section','','capture-group'),phase=group.phase_label?` · ${group.phase_label}`:'';
+        section.append(el('h4',`时刻组 ${group.capture_group_index??i} · 全局步 ${group.global_step??group.start_step??'?'}${phase}`));
+        if(group.frame_status) section.append(el('p',`采集状态：${group.frame_status}${group.run_length?` · 稳定去重 ${group.run_length} 次、重复 ${group.duplicate_count??0} 次`:''}`));
+        const views=el('div','','capture-views');
+        for(const view of group.views||[]){
+          const figure=el('figure','',`capture-view ${view.view_id==='agent'?'agent-view':'debug-view'}`);
+          const viewName=view.view_id==='agent'?(item.protocol==='hard-selective-V/v1'&&group.phase_public?'第一人称（V公开输入）':'第一人称（调试采集）'):view.purpose==='distant_room_overview'?'远景（仅调试）':view.purpose==='H03_stovetop_detail'?'灶台局部（仅调试）':view.purpose==='H05_contents_oblique_detail'?'微波炉与土豆局部（仅调试）':'补充视角（仅调试）';
+          figure.append(el('strong',viewName));
+          if(view.src){const img=el('img');img.src=view.src;img.alt=`时刻组 ${group.capture_group_index??i} ${view.view_id||''}`;img.loading='lazy';figure.append(img);}else figure.append(el('div',view.status||'该同步视角没有可用图像','missing'));
+          if(view.sha256)figure.append(el('small',`SHA-256 ${view.sha256}`));views.append(figure);
+        }
+        section.append(views);details.append(section);
+      }
+    }
+    for(const [i,frame] of ((timeline.capture_groups||[]).length?[]:(timeline.frames||[])).entries()) {
       const figure=el('figure','', 'audit-frame'),caption=`私有帧 ${i+1} · ${frame.stage||'未标注阶段'}${frame.view_id?` · 视角 ${frame.view_id}`:''}`;
       if(frame.src){const img=el('img');img.src=frame.src;img.alt=caption;img.loading='lazy';figure.append(img);} else figure.append(el('div','审计帧文件缺失','missing'));
       const meta=[frame.start_step!=null||frame.end_step!=null?`步骤 ${frame.start_step??'?'}–${frame.end_step??'?'}`:'',frame.run_length!=null?`原有 ${frame.run_length} 张`:'',frame.duplicate_count!=null?`重复 ${frame.duplicate_count} 张`:''].filter(Boolean).join(' · ');
@@ -239,7 +281,7 @@
   function switchBatch(id) {
     current=batches.find(b=>b.id===id);$('batch').value=id;questions=[];
     if(!current)return;
-    for(const item of current.items) {
+    for(const item of [...current.items].sort((a,b)=>({'hard-selective-V/v1':0,'hard-selective-S/v1':1}[a.protocol]??2)-({'hard-selective-V/v1':0,'hard-selective-S/v1':1}[b.protocol]??2))) {
       if(item.kind==='dataset') for(const q of item.questions) questions.push({...q,text:q.question,key:`${item.id}/${q.id}`,item});
       else if(item.kind==='diagnostic') questions.push({id:'diagnostic',text:'生成尝试未发布为正式题目',key:`${item.id}/diagnostic`,item});
       else questions.push({id:item.presentation?'scenario-v2':'visual',text:item.presentation?.title||mechanismQuestions[item.fact_id]||'检查本项诊断截图是否足以看清目标状态。',key:`${item.id}/${item.presentation?'scenario-v2':'visual'}`,item});
@@ -247,7 +289,8 @@
     $('search').value='';$('filter').value='all';notice('');loadReview();
     const broken=current.items.reduce((n,item)=>n+mediaIssues(item).length,0), invalidNative=current.items.filter(item=>item.native_measurement_valid===false).length;
     const diagnosticCount=current.items.filter(item=>item.kind==='diagnostic').length;
-    if(diagnosticCount)notice(`当前批次包含 ${diagnosticCount} 次未发布生成尝试${broken?`，${broken} 个原始媒体异常`:''}${invalidNative?`，另有 ${invalidNative} 条原生测量被记录为无效`:''}。失败尝试只作诊断展示，不计入正式题目。`);
+    if(diagnosticCount)notice(`source_incomplete：当前批次有 ${diagnosticCount} 次未发布生成尝试。每页会说明停止阶段、已记录的失败原因和未完成的采集步骤；这些诊断不计入正式题目。${broken?`另有 ${broken} 个原始媒体异常。`:''}${invalidNative?`另有 ${invalidNative} 条原生测量被记录为无效。`:''}`);
+    else if(current.source_media_status==='source_incomplete')notice('source_incomplete：该批次存在未完成的源数据或生成尝试。查看具体诊断页中的停止阶段、失败原因和缺失的后续采集步骤；不要将批次视为已完整生成。');
     else if(broken||invalidNative)notice(`当前批次原始媒体异常 ${broken} 项${invalidNative?`，另有 ${invalidNative} 条原生测量被记录为无效`:''}。页面用于诊断，不能当作完整可用数据。请看每条顶部和图片框内的具体原因。`);
     else if(current.review_revision)notice('本版新增了具体场景和候选问题，审核范围已扩大。旧版截图意见保留在原浏览器存储中；本版单独记录，不自动当作题目通过。');
     selected=null;

@@ -70,7 +70,12 @@ def _move(ctx: Any, role: str, slot: str):
     if not destination:
         raise HardConstructionError(f"No verified receptacle waypoint for {slot!r}")
     try:
+        navigate = getattr(ctx, "navigate_to", None)
+        if callable(navigate):
+            navigate(oid, "beforepickup")
         ctx.ops.pickup_event(oid, look_first=False)
+        if callable(navigate):
+            navigate(destination, "beforeput")
         result = None
         attempts = []
         for offset in range(3):
@@ -126,12 +131,29 @@ def _choose_waypoint(ctx: Any, name: str, *, exclude: tuple[str, ...] = (), far_
     if far_from:
         origin = ctx.obj(far_from).get("position")
         if isinstance(origin, dict):
-            rows.sort(key=lambda o: -math.dist(
+            # Nearby candidates reduce path length and make native approach
+            # feasible while the agent is carrying an object.  A farthest
+            # arbitrary buffer can be unreachable from either burner.
+            rows.sort(key=lambda o: math.dist(
                 tuple(float(origin[k]) for k in ("x", "y", "z")),
                 tuple(float(o["position"][k]) for k in ("x", "y", "z"))))
     if not rows:
         raise HardConstructionError(f"No existing native countertop/receptacle available for waypoint {name}")
     return _set_waypoint(ctx, name, rows[0])
+
+
+def _choose_h03_buffer(ctx: Any) -> str:
+    """Choose an existing surface close to both mapped burners."""
+    rows = _surface_candidates(ctx, exclude=("BA", "BB"))
+    positions = [ctx.obj(role).get("position") for role in ("BA", "BB")]
+    if not rows or not all(isinstance(p, dict) for p in positions):
+        raise HardConstructionError("H03 needs a native buffer and positions for both mapped burners")
+    center = tuple((float(positions[0][key]) + float(positions[1][key])) / 2
+                   for key in ("x", "y", "z"))
+    rows.sort(key=lambda row: (math.dist(
+        center, tuple(float(row["position"][key]) for key in ("x", "y", "z"))),
+        str(row.get("objectId", ""))))
+    return _set_waypoint(ctx, "buffer", rows[0])
 
 
 def _native_setup_place(ctx: Any, role: str, slot: str):
@@ -152,6 +174,20 @@ def _native_setup_place(ctx: Any, role: str, slot: str):
         raise HardConstructionError(f"Native prehistory placement {role} -> {slot} failed: {exc}") from exc
     if parent not in (ctx.obj(role).get("parentReceptacles") or []):
         raise HardConstructionError(f"Prehistory placement did not verify {role} -> {slot}")
+
+
+def _calibrate_forward(ctx: Any, role: str, origin: str, destination: str,
+                       *, restore_to: str | None = None):
+    """Exercise a required native placement, then restore with setup placement."""
+    if not _relation(ctx, role, origin):
+        raise HardConstructionError(f"Cannot calibrate {role}: expected native origin {origin} is absent")
+    _move(ctx, role, destination)
+    if not _relation(ctx, role, destination):
+        raise HardConstructionError(f"Calibration placement {role} -> {destination} was not verified")
+    restore_to = restore_to or origin
+    _native_setup_place(ctx, role, restore_to)
+    if not _relation(ctx, role, restore_to):
+        raise HardConstructionError(f"Setup restoration failed to restore {role} -> {restore_to}")
 
 
 def _native_toggle(ctx: Any, role: str, on: bool):
@@ -197,15 +233,24 @@ def _prepare_h03_native(ctx: Any, variant: int):
             ctx.ops.set_toggle(knob["objectId"], False)
     ctx.require(all(ctx.obj(row["objectId"]).get("isToggled") is False for row in all_knobs),
                 "H03 could not establish all native stove knobs off before history")
-    _choose_waypoint(ctx, "buffer", exclude=("BA", "BB"), far_from="BA")
+    _choose_h03_buffer(ctx)
     _native_setup_place(ctx, "X", "BA")
     _native_setup_place(ctx, "Y", "BB")
     for role in ("X", "Y"):
         if _temperature(ctx.obj(role)) != "RoomTemp":
             raise HardConstructionError(f"H03 needs {role} at native RoomTemp before history")
+    # Calibrate the same six native moves as one swap plus restoration. This
+    # includes the cross-burner placements Y->BA and X->BB that buffer-only
+    # roundtrips would miss.
+    _h03_native_cycle(ctx, "swap", public=False)
+    _h03_native_cycle(ctx, "restore", public=False)
+    ctx.require(_relation(ctx, "X", "BA") and _relation(ctx, "Y", "BB"),
+                "H03 native endpoint preflight did not restore burner assignments")
+    if any(_temperature(ctx.obj(role)) != "RoomTemp" for role in ("X", "Y")):
+        raise HardConstructionError("H03 endpoint calibration changed a container temperature")
 
 
-def _h03_native_cycle(ctx: Any, cycle: str):
+def _h03_native_cycle(ctx: Any, cycle: str, *, public: bool = True):
     if cycle in {"swap", "swap_again"}:
         _move(ctx, "X", "buffer")
         _move(ctx, "Y", "BA")
@@ -216,7 +261,7 @@ def _h03_native_cycle(ctx: Any, cycle: str):
         _move(ctx, "Y", "BB")
     else:
         raise HardConstructionError(f"Unknown H03 placement cycle {cycle!r}")
-    ctx.phase("H03历史换位后稳定等待（4次原生Pass）", public=True, kind="history")
+    ctx.phase("H03历史换位后稳定等待（4次原生Pass）", public=public, kind="history")
     _settle(ctx, 4)
     ctx.require(not ctx.session.inventory(), f"H03 {cycle} left an object held")
     ctx.require(all(ctx.obj(k).get("isToggled") is False for k in ("KA", "KB")),
@@ -307,35 +352,61 @@ def _target_event(ctx: Any, action: str, subject: str, destination: str | None =
     """Record truthful target event fields, including failures and native receipt."""
     # Keep all bound roles so displacement and location queries can be derived
     # against the same event boundary, including non-target carried contents.
+    # Navigation is a native pre-event operation.  Complete it before freezing
+    # the event-time state so navigation-induced motion cannot leak into the
+    # measured target boundary.
+    navigate = getattr(ctx, "navigate_to", None)
+    if callable(navigate):
+        phases = getattr(ctx, "executed_phases", None)
+        target_label = None
+        if phases and phases[-1].get("kind") == "target":
+            target_label = phases[-1].get("label")
+            ctx.phase("目标事件前原生接近", public=True, kind="history")
+        if action == "PutObject" and destination is not None:
+            navigate(ctx.roles[destination], "beforeput")
+        elif action == "PickupObject":
+            navigate(ctx.roles[subject], "beforepickup")
+        elif action == "ToggleObjectOn":
+            navigate(ctx.roles[subject], "beforeinteract")
+        if target_label is not None:
+            ctx.phase(target_label, public=True, kind="target")
     before = ctx.session.snapshot()
     ctx.before_target = before
     ctx.before_target_roles = _snapshot(ctx, tuple(ctx.roles))
     row = {"action": action, "subject": subject, "destination": destination,
            "attempted": True, "success": False, "native_action_success": False,
            "postcondition_verified": False, "record": None, "error": None}
+    ctx.target_frozen = True
     try:
-        if action == "PutObject":
-            result = ctx.ops.put_event(ctx.roles[subject], ctx.roles[destination])
-        elif action == "PickupObject":
-            result = ctx.ops.pickup_event(ctx.roles[subject], look_first=False)
-        elif action == "ToggleObjectOn":
-            result = ctx.ops.set_toggle(ctx.roles[subject], True)
-        else:
-            raise ValueError(f"Unsupported target event action {action}")
-        row["record"] = result.record
-        row["success"] = result.record.get("lastActionSuccess") is True
-        row["native_action_success"] = row["success"]
-        row["postcondition_verified"] = True
-    except Exception as exc:
-        row["error"] = f"{type(exc).__name__}: {exc}"
-        records = getattr(ctx.session, "records", [])
-        if records:
-            last = records[-1]
-            expected_object = ctx.roles.get(destination) if action == "PutObject" else ctx.roles.get(subject)
-            if last.get("action") == action and last.get("objectId") == expected_object:
-                row["record"] = last
-                row["success"] = last.get("lastActionSuccess") is True
-                row["native_action_success"] = row["success"]
+        try:
+            if action == "PutObject":
+                result = ctx.ops.put_event(ctx.roles[subject], ctx.roles[destination])
+            elif action == "PickupObject":
+                result = ctx.ops.pickup_event(ctx.roles[subject], look_first=False)
+            elif action == "ToggleObjectOn":
+                result = ctx.ops.set_toggle(ctx.roles[subject], True)
+            else:
+                raise ValueError(f"Unsupported target event action {action}")
+            row["record"] = result.record
+            row["success"] = result.record.get("lastActionSuccess") is True
+            row["native_action_success"] = row["success"]
+            row["postcondition_verified"] = True
+        except Exception as exc:
+            row["error"] = f"{type(exc).__name__}: {exc}"
+            records = getattr(ctx.session, "records", [])
+            if records:
+                last = records[-1]
+                expected_object = ctx.roles.get(destination) if action == "PutObject" else ctx.roles.get(subject)
+                kwargs = last.get("kwargs") if isinstance(last.get("kwargs"), dict) else {}
+                if last.get("action") == action and kwargs.get("objectId") == expected_object:
+                    row["record"] = last
+                    row["native_action_success"] = last.get("lastActionSuccess") is True
+                    # The operation wrapper raised (often because native
+                    # success was followed by a failed relation check), so the
+                    # target construction remains failed even with a receipt.
+                    row["success"] = False
+    finally:
+        ctx.target_frozen = False
     samples, total_passes = _sample_observation_window(ctx, observation_passes)
     ctx.after_target = ctx.session.snapshot()
     ctx.after_target_roles = _snapshot(ctx, tuple(ctx.roles))
@@ -372,6 +443,8 @@ def _h01(ctx: Any, variant: int):
     _native_setup_place(ctx, "A", "A_park")
     _native_setup_place(ctx, "B", "B_park")
     _native_toggle(ctx, "M", False)
+    _calibrate_forward(ctx, "A", "A_park", "M")
+    _calibrate_forward(ctx, "B", "B_park", "M")
     _liquid(ctx, "A", None)
     _liquid(ctx, "B", None)
     ctx.initial_metadata = ctx.session.snapshot()
@@ -397,6 +470,9 @@ def _h01(ctx: Any, variant: int):
     _phase(ctx, "H01 machine enabled before target")
     ctx.ops.set_toggle(ctx.roles["M"], True)
     _phase(ctx, f"H01 pickup target {target}")
+    navigate = getattr(ctx, "navigate_to", None)
+    if callable(navigate):
+        navigate(ctx.roles[target], "beforepickup")
     ctx.ops.pickup_event(ctx.roles[target], look_first=False)
     planned_before = {"A": "Empty", "B": "Water"} if variant in (1, 4) else {"A": "Water", "B": "Empty"}
     for role, value in planned_before.items():
@@ -436,6 +512,22 @@ def _h02(ctx: Any, variant: int):
                "P": ctx.obj("P"), "Q": ctx.obj("Q"), "X": ctx.obj("X")})
     ctx.require(initial_order_ok, "H02 initial plate positions or Apple-on-P relation are not verified")
     _phase(ctx, "H02 prehistory slot and identity calibration", public=False, kind="setup")
+    # Preflight the actual ordered native construction for this variant, then
+    # use setup placements to restore the baseline. Do not test a placement
+    # onto a plate while that destination still contains the other plate.
+    for role, slot in (("X", "Q"), ("X", "P"), ("X", "apple_staging"),
+                       ("P", "plate_buffer"), ("Q", "left"), ("P", "right")):
+        _move(ctx, role, slot)
+    _move(ctx, "X", "P" if variant in (1, 4) else "Q")
+    _native_setup_place(ctx, "X", "apple_staging")
+    _native_setup_place(ctx, "P", "plate_buffer")
+    _native_setup_place(ctx, "Q", "right")
+    _native_setup_place(ctx, "P", "left")
+    _native_setup_place(ctx, "X", "P")
+    ctx.require(_relation(ctx, "X", "P") and _relation(ctx, "P", "left")
+                and _relation(ctx, "Q", "right")
+                and float(ctx.obj("P")["position"]["x"]) < float(ctx.obj("Q")["position"]["x"]),
+                "H02 prehistory endpoint calibration did not restore the initial placements")
     _start(ctx, "公开身份规则：P、Q 沿用初始物体身份；左、右位置变化不能重命名物体。")
     _phase(ctx, "H02 initial native placement")
     ctx.initial_metadata = ctx.session.snapshot()
@@ -516,6 +608,23 @@ def _h04(ctx: Any, variant: int):
         raise HardConstructionError(f"Native prehistory nested setup failed: {type(exc).__name__}: {exc}") from exc
     for alias, nested_role in (("P", "outer"), ("B", "inner"), ("X", "content")):
         ctx.bind(alias, ctx.roles[nested_role])
+    # Calibrate only the forward sequence required by this variant. Restore
+    # with setup placement so preflight does not invent extra public-history
+    # PutObject routes.
+    if variant in (1, 2):
+        _move(ctx, "X", "h04_external")
+        if variant == 1:
+            _move(ctx, "X", "B")
+        else:
+            _native_setup_place(ctx, "X", "B")
+    else:
+        _move(ctx, "B", "h04_external")
+        if variant == 4:
+            _move(ctx, "X", "P")
+            _native_setup_place(ctx, "X", "B")
+        _native_setup_place(ctx, "B", "P")
+    if not (_relation(ctx, "B", "P") and _relation(ctx, "X", "B")):
+        raise HardConstructionError("H04 prehistory endpoint calibration did not restore the nested chain")
     _start(ctx, "公开身份规则：P 是外盘、B 是碗、X 是苹果；只按实际成功的原生搬运更新位置。")
     _phase(ctx, "H04 verify nested starting chain")
     ctx.initial_metadata = ctx.session.snapshot()
@@ -629,6 +738,12 @@ def _h05_cook_history_native(ctx: Any):
 
 def _h05(ctx: Any, variant: int):
     _prepare_h05_native(ctx, variant)
+    _calibrate_forward(ctx, "Z", "cooling_C", "Microwave")
+    _calibrate_forward(ctx, "Z", "cooling_C", "final_E")
+    ctx.require(ctx.obj("Z").get("isCooked") is False
+                and _temperature(ctx.obj("Z")) == "RoomTemp"
+                and _relation(ctx, "Z", "cooling_C"),
+                "H05 endpoint calibration did not restore the uncooked RoomTemp baseline")
     _start(ctx, "公开温度前提：最终测试阶段的室温基线已通过本次原生 metadata 确认；不预告土豆熟度或最终内外位置。")
     _phase(ctx, "H05 baseline uncooked and RoomTemp")
     state = ctx.obj("Z")

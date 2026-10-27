@@ -140,6 +140,9 @@ def write_audit_timeline(ctx, trace, case):
     boundaries = json.loads((Path(trace.directory) / "boundaries.json").read_text(encoding="utf-8"))
     write_json(Path(trace.directory) / "review_timeline.json", {
         "sample_id": case.case_id, "title": case.title, "frames": runs,
+        "capture_groups": [{k: v for k, v in group.items() if k != "_signature"}
+                           for group in getattr(trace, "_capture_groups", [])],
+        "capture_group_count": len(getattr(trace, "_capture_groups", [])),
         "boundaries": [{**r, "step_index": r["global_step"]} for r in boundaries],
         "steps": ([{"采集检查": ctx.capture_diagnostics}] if getattr(ctx, "capture_diagnostics", None) else []) + trace.events,
         "checks": ctx.checks,
@@ -167,13 +170,35 @@ def export_case(ctx, trace, root, case):
                              "expected_answer": answer})
     anchors = []
     for anchor in getattr(ctx, "initial_identity_regions", []):
-        matching = next((i + 1 for i, f in enumerate(frames) if f["view_id"] == anchor["view_id"]), None)
+        # Public identity regions must point to the first-person agent image
+        # from the synchronized group in which the region was measured.
+        if anchor.get("view_id", "agent") != "agent":
+            continue
+        group_index = anchor.get("initial_capture_group_index")
+        matching = next((i + 1 for i, f in enumerate(frames)
+                         if f["view_id"] == "agent" and
+                         (group_index is None and f["start_step"] <= anchor.get("global_step", -1) <= f["end_step"]
+                          or group_index is not None and f["start_step"] <= group_index <= f["end_step"])), None)
         if matching is not None:
-            anchors.append({**anchor, "initial_frame_index": matching})
+            anchors.append({"alias": anchor["alias"], "view_id": "agent",
+                            "pixel_bbox": anchor["pixel_bbox"],
+                            "initial_frame_index": matching,
+                            "initial_capture_group_index": frames[matching - 1]["capture_group_index"]})
     # Distinct aliases must be grounded in the public initial images. The
     # anchor is a pixel region from those images, not native/world metadata.
     if set(public_roles(ctx)) - {a["alias"] for a in anchors}:
         raise RuntimeError("Initial public identity anchors do not cover the task roles")
+    # Public indices begin at the public history, so hidden calibration length
+    # cannot reveal the variant. Full global indices remain in private traces.
+    origin = min(frame["start_step"] for frame in frames)
+    for index, frame in enumerate(frames, 1):
+        frame["start_step"] -= origin
+        frame["end_step"] -= origin
+        frame["capture_group_index"] = index
+        if "step_numbers" in frame:
+            frame["step_numbers"] = [step - origin for step in frame["step_numbers"]]
+    for anchor in anchors:
+        anchor["initial_capture_group_index"] = anchor["initial_frame_index"]
     result = []
     for protocol, mode in (("hard-selective-V/v1", "V"), ("hard-selective-S/v1", "S")):
         sample_id = f"{case.case_id}_{mode}"

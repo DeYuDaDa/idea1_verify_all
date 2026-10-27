@@ -19,7 +19,8 @@ class TraceFixture:
         (directory / "frames" / "one.png").write_bytes(b"public-image-fixture")
 
     def model_frames(self):
-        return [{"path": "frames/one.png", "stage": "历史片段01", "view_id": "fixed_0",
+        return [{"path": "frames/one.png", "stage": "历史片段01", "view_id": "agent",
+                 "view_role": "agent_first_person",
                  "run_length": 4, "duplicate_count": 3, "start_step": 1, "end_step": 4,
                  "capture_group_index": 1}]
 
@@ -38,7 +39,8 @@ def fixture_context():
         initial_metadata=old, before_target=old, after_target=after, waypoints={},
         target_event={"action": "ToggleObjectOn", "subject": "Microwave", "success": True},
         public_declarations=["完整的初态说明不能丢失"],
-        initial_identity_regions=[{"alias": a, "view_id": "fixed_0", "pixel_bbox": [0, 0, 1, 1]}
+        initial_identity_regions=[{"alias": a, "view_id": "agent", "initial_capture_group_index": 1,
+                                   "global_step": 1, "pixel_bbox": [0, 0, 1, 1]}
                                   for a in ("Microwave", "Z")],
         questions=[{"subject": "Z", "predicate": "isCooked", "answer_mode": "boolean",
                     "question": "土豆现在熟了吗？"}])
@@ -106,6 +108,14 @@ class HardPipelineTests(unittest.TestCase):
                 if mode == "V":
                     self.assertEqual(len(record["model_input"]["frames"]), 1)
                     self.assertEqual(record["model_input"]["frames"][0]["duplicate_count"], 3)
+                    self.assertEqual(record["model_input"]["frames"][0]["start_step"], 0)
+                    self.assertEqual(record["model_input"]["initial_identity_regions"][0]["initial_capture_group_index"], 1)
+                    self.assertTrue(all(frame["view_id"] == "agent"
+                                        for frame in record["model_input"]["frames"]))
+                    anchors = record["model_input"]["initial_identity_regions"]
+                    self.assertTrue(all(anchor["view_id"] == "agent" for anchor in anchors))
+                    self.assertTrue(all(anchor["initial_capture_group_index"] == 1 for anchor in anchors))
+                    self.assertFalse(any("fixed_" in json.dumps(anchor) for anchor in anchors))
                     self.assertIn("完整的初态说明不能丢失", request["request_text"])
                 else:
                     self.assertEqual(record["model_input"]["frames"], [])

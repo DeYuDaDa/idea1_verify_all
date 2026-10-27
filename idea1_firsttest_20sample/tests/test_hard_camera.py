@@ -8,7 +8,9 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from hard_camera import CameraPreflightError, audit_fixed_views, configure_evidence_cameras
+from hard_camera import (CameraPreflightError, _constrain_candidates_to_room, _microwave_contents_candidates,
+                         _overview_candidates, _role_envelope, audit_fixed_views,
+                         configure_evidence_cameras)
 
 
 def object_row(object_id, object_type, x, y=1.0, z=1.0):
@@ -93,6 +95,37 @@ class Trace:
 
 
 class HardCameraTests(unittest.TestCase):
+    def test_far_debug_camera_is_constrained_inside_measured_room_bounds(self):
+        bounds = {"center": {"x": 0., "y": 1.25, "z": 0.},
+                  "size": {"x": 5., "y": 2.7, "z": 5.5}}
+        pose = {"position": {"x": 8., "y": 5., "z": -8.},
+                "aim_point": {"x": 0., "y": 1., "z": 0.}}
+        result = _constrain_candidates_to_room([pose], bounds)[0]
+        self.assertLess(result["position"]["x"], 2.5)
+        self.assertGreater(result["position"]["z"], -2.75)
+        self.assertLess(result["position"]["y"], 2.6)
+        self.assertTrue(result["room_bbox_constrained"])
+        self.assertEqual(pose["position"]["x"], 8.)
+
+    def test_overview_and_h05_detail_candidates_use_geometry_not_labels(self):
+        roles = {
+            "Microwave": object_row("microwave", "Microwave", 0.0, 1.8, -2.0),
+            "Z": object_row("potato", "Potato", -1.4, 0.95, -2.1),
+        }
+        roles["Z"]["axisAlignedBoundingBox"]["size"] = {"x": 1.2, "y": 1.4, "z": 3.2}
+        envelope = _role_envelope(roles, ["Microwave", "Z"])
+        candidates = _overview_candidates(envelope)
+        self.assertEqual(len(candidates), 6)
+        self.assertTrue(all(candidate["fov_degrees"] > 70 for candidate in candidates))
+        self.assertTrue(all(candidate["envelope"]["role_aliases"] == ["Microwave", "Z"]
+                            for candidate in candidates))
+        detail = _microwave_contents_candidates(roles, "Z", "Microwave")
+        self.assertEqual(len(detail), 6)
+        self.assertTrue(any("high" in row["candidate_id"] for row in detail))
+        self.assertTrue(any("side" in row["candidate_id"] for row in detail))
+        self.assertTrue(any("openfront" in row["candidate_id"] for row in detail))
+        self.assertTrue(all(row["semantic_readability"] == "not_assessed" for row in detail))
+
     def test_geometry_preflight_adds_fixed_cameras_and_reports_mask_only_coverage(self):
         session = CameraSession()
         ctx = Context(session)
@@ -102,6 +135,8 @@ class HardCameraTests(unittest.TestCase):
             self.assertEqual(report["status"], "screened")
             self.assertEqual(report["family"], "coffee_machine")
             self.assertLessEqual(len(report["poses"]), 3)
+            self.assertEqual(report["selected_views"][0]["purpose"], "distant_room_overview")
+            self.assertGreater(report["selected_views"][0]["camera_distance_to_aim_m"], 4.0)
             self.assertTrue(all(action["action"] in {"AddThirdPartyCamera", "UpdateThirdPartyCamera"}
                                 for action in report["camera_actions"]))
             self.assertTrue(all(not action["guard_changed_entities"] for action in report["camera_actions"]))
@@ -110,6 +145,8 @@ class HardCameraTests(unittest.TestCase):
             self.assertEqual(report["semantic_readability"], "not_assessed")
             self.assertTrue(all(Path(path).is_file() for path in report["rgb_files"]))
             self.assertEqual(len(trace._cameras), len(report["selected_views"]))
+            self.assertTrue(all(row["semantic_readability"] == "not_assessed"
+                                for row in report["role_coverage_diagnostics"]))
             self.assertTrue(Path(temporary, "camera_preflight.json").is_file())
 
     def test_physical_state_change_raises_and_stops_camera_trials(self):

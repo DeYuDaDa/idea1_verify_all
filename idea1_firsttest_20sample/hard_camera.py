@@ -220,6 +220,152 @@ def _include_waypoints(roles: Mapping[str, dict[str, Any]], *waypoint_sources: t
     return expanded, used
 
 
+def _role_envelope(roles: Mapping[str, Mapping[str, Any]], aliases: list[str]) -> dict[str, Any] | None:
+    lows = {axis: math.inf for axis in ("x", "y", "z")}
+    highs = {axis: -math.inf for axis in ("x", "y", "z")}
+    used = []
+    for alias in aliases:
+        row = roles.get(alias, {})
+        box = row.get("axisAlignedBoundingBox") if isinstance(row, Mapping) else None
+        center = box.get("center") if isinstance(box, Mapping) else None
+        size = box.get("size") if isinstance(box, Mapping) else None
+        if isinstance(center, Mapping) and isinstance(size, Mapping):
+            try:
+                low = {axis: float(center[axis]) - float(size[axis]) / 2 for axis in lows}
+                high = {axis: float(center[axis]) + float(size[axis]) / 2 for axis in highs}
+            except (KeyError, TypeError, ValueError):
+                low = high = None
+        else:
+            low = high = None
+        if low is None:
+            position = row.get("position") if isinstance(row, Mapping) else None
+            if not isinstance(position, Mapping):
+                continue
+            try:
+                point = {axis: float(position[axis]) for axis in lows}
+            except (KeyError, TypeError, ValueError):
+                continue
+            low = {axis: point[axis] - 0.12 for axis in lows}
+            high = {axis: point[axis] + 0.12 for axis in highs}
+        if not all(math.isfinite(value) for value in (*low.values(), *high.values())):
+            continue
+        used.append(alias)
+        for axis in lows:
+            lows[axis] = min(lows[axis], low[axis])
+            highs[axis] = max(highs[axis], high[axis])
+    if not used:
+        return None
+    center = {axis: (lows[axis] + highs[axis]) / 2 for axis in lows}
+    size = {axis: highs[axis] - lows[axis] for axis in lows}
+    radius = math.sqrt(size["x"] ** 2 + size["y"] ** 2 + size["z"] ** 2) / 2
+    return {"roles": used, "min": lows, "max": highs, "center": center,
+            "size": size, "radius": radius}
+
+
+def _aim_rotation(position: Mapping[str, float], target: Mapping[str, float]) -> dict[str, float]:
+    dx, dy, dz = target["x"] - position["x"], target["y"] - position["y"], target["z"] - position["z"]
+    horizontal = math.hypot(dx, dz)
+    return {"x": math.degrees(math.atan2(-dy, max(horizontal, 1e-6))),
+            "y": math.degrees(math.atan2(dx, dz)) % 360, "z": 0.0}
+
+
+def _overview_candidates(envelope: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Build genuinely distant poses around the union of role and waypoint bounds."""
+    center = envelope["center"]
+    radius = float(envelope["radius"])
+    distance = max(4.0, radius * 2.8 + 1.0)
+    result = []
+    for index, (azimuth, height, scale) in enumerate(((0, 1.1, 1.0), (90, 1.1, 1.0),
+                                                       (180, 1.1, 1.0), (270, 1.1, 1.0),
+                                                       (45, 2.0, 0.82), (225, 2.0, 0.82))):
+        angle = math.radians(azimuth)
+        position = {"x": center["x"] + distance * scale * math.sin(angle),
+                    "y": center["y"] + height,
+                    "z": center["z"] + distance * scale * math.cos(angle)}
+        result.append({"candidate_id": f"overview_far_{index + 1}",
+            "purpose": "distant_room_overview", "target_roles": list(envelope["roles"]),
+            "position": position, "aim_point": dict(center), "rotationEuler": _aim_rotation(position, center),
+            "fov_degrees": 78.0, "envelope": {"center": dict(center), "size": dict(envelope["size"]),
+                "distance": distance * scale, "role_aliases": list(envelope["roles"])},
+            "frustum_coverage": "candidate_for_role_envelope", "occlusion": "not_assessed",
+            "semantic_readability": "not_assessed"})
+    return result
+
+
+def _constrain_candidates_to_room(candidates, scene_bounds):
+    """Keep proposed debug cameras inside the measured scene bounding box.
+
+    This avoids putting a far camera behind the room's exterior walls. A scene
+    bounding box still does not establish line of sight; masks remain required.
+    """
+    center = (scene_bounds or {}).get("center")
+    size = (scene_bounds or {}).get("size")
+    if not isinstance(center, Mapping) or not isinstance(size, Mapping):
+        return candidates
+    output = []
+    for candidate in candidates:
+        adjusted = copy.deepcopy(candidate)
+        position = adjusted["position"]
+        for axis in ("x", "y", "z"):
+            half = float(size[axis]) / 2
+            margin = min(0.2, half / 4)
+            position[axis] = min(float(center[axis]) + half - margin,
+                                 max(float(center[axis]) - half + margin, position[axis]))
+        if isinstance(adjusted.get("aim_point"), Mapping):
+            adjusted["rotationEuler"] = _aim_rotation(position, adjusted["aim_point"])
+        adjusted["room_bbox_constrained"] = True
+        adjusted["occlusion"] = "not_assessed_by_bbox"
+        output.append(adjusted)
+    return output
+
+
+def _microwave_contents_candidates(roles: Mapping[str, Mapping[str, Any]], potato_alias: str,
+                                   microwave_alias: str) -> list[dict[str, Any]]:
+    potato = roles.get(potato_alias, {})
+    microwave = roles.get(microwave_alias, {})
+    def center_of(row):
+        box = row.get("axisAlignedBoundingBox", {}) if isinstance(row, Mapping) else {}
+        center = box.get("center") if isinstance(box, Mapping) else None
+        return center if isinstance(center, Mapping) else row.get("position") if isinstance(row, Mapping) else None
+    target_raw, appliance_raw = center_of(potato), center_of(microwave)
+    if not isinstance(target_raw, Mapping) or not isinstance(appliance_raw, Mapping):
+        return []
+    try:
+        target = {axis: float(target_raw[axis]) for axis in ("x", "y", "z")}
+        appliance = {axis: float(appliance_raw[axis]) for axis in ("x", "y", "z")}
+    except (KeyError, TypeError, ValueError):
+        return []
+    rotation = microwave.get("rotation", {}) if isinstance(microwave, Mapping) else {}
+    try:
+        yaw = math.radians(float(rotation.get("y", 0.0)))
+    except (TypeError, ValueError):
+        yaw = 0.0
+    front = {"x": math.sin(yaw), "z": math.cos(yaw)}
+    side = {"x": math.cos(yaw), "z": -math.sin(yaw)}
+    # Approach the current door aperture axis, then vary lateral and vertical
+    # angle to reduce cabinet/door-frame occlusion without changing scene state.
+    context = {axis: (target[axis] + appliance[axis]) / 2 for axis in target}
+    specs = [("H05_openfront_axis", 0.0, 0.2, 1.35),
+             ("H05_openfront_high", 0.0, 1.0, 1.55),
+             ("H05_openfront_side_left", -0.75, 0.65, 1.55),
+             ("H05_openfront_side_right", 0.75, 0.65, 1.55),
+             ("H05_potato_high_oblique", 1.0, 1.45, 1.7),
+             ("H05_potato_low_side", -1.1, 0.05, 1.5)]
+    result = []
+    for candidate_id, lateral, height, distance in specs:
+        position = {"x": context["x"] + front["x"] * distance + side["x"] * lateral,
+                    "y": context["y"] + height,
+                    "z": context["z"] + front["z"] * distance + side["z"] * lateral}
+        aim = {axis: target[axis] * 0.75 + context[axis] * 0.25 for axis in target}
+        result.append({"candidate_id": candidate_id, "purpose": "H05_contents_oblique_detail",
+            "target_roles": [potato_alias, microwave_alias], "position": position,
+            "aim_point": aim, "rotationEuler": _aim_rotation(position, aim), "fov_degrees": 62.0,
+            "approach": "current_front_axis_or_high_side_oblique",
+            "frustum_coverage": "candidate_only", "occlusion": "not_assessed",
+            "semantic_readability": "not_assessed"})
+    return result
+
+
 def _is_room_noise(alias: str, object_row: Mapping[str, Any]) -> bool:
     label = (alias + " " + str(object_row.get("objectType", ""))).lower().replace("_", "")
     return any(token in label for token in ROOM_NOISE_TOKENS)
@@ -302,9 +448,10 @@ def configure_evidence_cameras(ctx: Any, trace: Any, out_dir: str | Path) -> dic
     metadata = _metadata(ctx)
     role_ids = _role_ids(ctx)
     actual_roles = _role_objects(ctx, role_ids, metadata)
+    targets = _current_essential_roles(ctx, metadata, role_ids)
     family, group = _family(ctx)
     report.update(hard_group=group, family=family, input_roles=role_ids,
-                  role_geometry={alias: {"position": row.get("position"),
+                  role_geometry={alias: {"position": row.get("position"), "rotation": row.get("rotation"),
                                          "axisAlignedBoundingBox": row.get("axisAlignedBoundingBox")}
                                  for alias, row in actual_roles.items()},
                   waypoints=_jsonable(getattr(ctx, "waypoints", {})))
@@ -336,8 +483,54 @@ def configure_evidence_cameras(ctx: Any, trace: Any, out_dir: str | Path) -> dic
     # override preserves the separately recorded waypoint range expansion.
     plan = plan_views(planning_roles, device_family=family)
     report["plan"] = plan
-    groups = [row for row in plan.get("groups", [])
-              if row.get("fit_status") != "not_fit" and row.get("status") not in {"not_fit", "oversized_bounds"}][:3]
+    # The broad overview is generated from the union AABB of every essential
+    # role, already expanded by explicitly supplied waypoint extents. This
+    # remains available when the planner marks the joint view oversized.
+    envelope = _role_envelope(planning_roles, list(targets))
+    groups = []
+    if envelope:
+        groups.append({"group_id": f"{family}_distant_room_overview",
+                       "purpose": "distant_room_overview", "roles": list(targets),
+                       "focus": {"point": envelope["center"], "aabb": envelope},
+                       "candidates": _overview_candidates(envelope),
+                       "geometry_source": "essential task-role union AABB plus supplied waypoints"})
+    elif plan.get("groups"):
+        report["overview_geometry_unavailable"] = True
+    if group == "H05":
+        potato_alias = next((alias for alias, row in actual_roles.items()
+                             if "potato" in str(row.get("objectType", "")).lower() or
+                             "potato" in alias.lower()), None)
+        microwave_alias = next((alias for alias, row in actual_roles.items()
+                                if "microwave" in str(row.get("objectType", "")).lower() or
+                                "microwave" in alias.lower()), None)
+        local_candidates = (_microwave_contents_candidates(actual_roles, potato_alias, microwave_alias)
+                            if potato_alias and microwave_alias else [])
+        if local_candidates:
+            groups.append({"group_id": "microwave_H05_contents_oblique_detail",
+                           "purpose": "H05_contents_oblique_detail",
+                           "roles": [potato_alias, microwave_alias],
+                           "candidates": local_candidates,
+                           "geometry_source": "current Potato and Microwave geometry; no door or world-state intervention"})
+    elif group == "H03":
+        detail = next((row for row in plan.get("groups", [])
+                       if "burner" in str(row.get("purpose", "")).lower()
+                       or "vessel" in str(row.get("purpose", "")).lower()), None)
+        if detail:
+            groups.append({**detail, "purpose": "H03_stovetop_detail",
+                           "group_id": "stove_H03_stovetop_detail"})
+    else:
+        local = next((row for row in plan.get("groups", [])
+                      if row.get("fit_status") != "not_fit" and row.get("status") not in {"not_fit", "oversized_bounds"}), None)
+        if local:
+            groups.append(local)
+    groups = groups[:3]  # overview + H03 task detail + at most one local view
+    for camera_group in groups:
+        aim = camera_group.get("focus", {}).get("point")
+        if isinstance(aim, Mapping):
+            camera_group["candidates"] = [{**pose, "aim_point": pose.get("aim_point", aim)}
+                                          for pose in camera_group.get("candidates", [])]
+        camera_group["candidates"] = _constrain_candidates_to_room(
+            camera_group.get("candidates", []), metadata.get("sceneBounds"))
     if not groups:
         report.update(status="rejected", error=f"no usable geometry plan: {plan.get('status')}")
         _write_report(directory, report)
@@ -391,13 +584,14 @@ def configure_evidence_cameras(ctx: Any, trace: Any, out_dir: str | Path) -> dic
             raise CameraPreflightError(report["error"], copy.deepcopy(report))
         return result
 
-    targets = _current_essential_roles(ctx, metadata, role_ids)
     for slot, camera_group in enumerate(groups):
         group_targets = {alias: role_ids[alias] for alias in camera_group.get("roles", [])
                          if alias in role_ids and alias in targets}
         camera_id: int | None = None
         best: dict[str, Any] | None = None
-        candidates = camera_group.get("candidates", [])[:4]
+        candidate_limit = 6 if camera_group.get("purpose") in {
+            "distant_room_overview", "H05_contents_oblique_detail"} else 4
+        candidates = camera_group.get("candidates", [])[:candidate_limit]
         for trial_index, pose in enumerate(candidates):
             kwargs = _camera_kwargs(pose)
             action = "AddThirdPartyCamera" if camera_id is None else "UpdateThirdPartyCamera"
@@ -437,10 +631,26 @@ def configure_evidence_cameras(ctx: Any, trace: Any, out_dir: str | Path) -> dic
                      "frame_status": "captured" if rgb_path else "third_party_rgb_missing",
                      "rendered_presence": presence, "mask_status": presence.get("status"),
                      "mask_objects_available": bool(masks is not None and camera_id < len(masks))}
+            aim_point = pose.get("aim_point") or pose.get("envelope", {}).get("center")
+            if isinstance(aim_point, Mapping):
+                trial["aim_point"] = _jsonable(aim_point)
+                trial["camera_distance_to_aim_m"] = math.sqrt(sum(
+                    (float(pose["position"][axis]) - float(aim_point[axis])) ** 2
+                    for axis in ("x", "y", "z")))
             report["candidate_trials"].append(trial)
             report["actual_masks"].append({"camera_id": camera_id,
                 "candidate_id": pose.get("candidate_id"), "presence": presence})
             score = presence.get("score", -1.0) if rgb_path else -1.0
+            if rgb_path and camera_group.get("purpose") == "H05_contents_oblique_detail":
+                potato_role = next((alias for alias in camera_group.get("roles", [])
+                                    if "potato" in alias.lower() or alias.lower() == "z"), None)
+                potato_visible = bool(presence.get("roles", {}).get(potato_role, {}).get("framing_presence"))
+                # Prefer a candidate that actually frames the queried contents;
+                # a large microwave mask must not outscore a missing Potato.
+                score += 1000.0 if potato_visible else 0.0
+                trial["candidate_selection_reason"] = {
+                    "primary_role": potato_role, "primary_role_framing_presence": potato_visible,
+                    "semantic_readability": "not_assessed"}
             if best is None or score > best["score"]:
                 best = {"pose": pose, "presence": presence, "score": score,
                         "camera_id": camera_id, "group": camera_group}
@@ -472,6 +682,11 @@ def configure_evidence_cameras(ctx: Any, trace: Any, out_dir: str | Path) -> dic
         selected.append({"camera_id": camera_id, "view_id": f"fixed_{camera_id}",
                          "purpose": camera_group["purpose"], "target_roles": targets,
                          "group_id": camera_group["group_id"], "pose": best["pose"],
+                         "aim_point": _jsonable(best["pose"].get("aim_point") or best["pose"].get("envelope", {}).get("center")),
+                         "camera_distance_to_aim_m": (math.sqrt(sum(
+                             (float(best["pose"]["position"][axis]) - float((best["pose"].get("aim_point") or best["pose"].get("envelope", {}).get("center"))[axis])) ** 2
+                             for axis in ("x", "y", "z")))
+                             if isinstance(best["pose"].get("aim_point") or best["pose"].get("envelope", {}).get("center"), Mapping) else None),
                          "path": str(selected_path) if selected_path else None,
                          "rendered_presence": presence})
         report["poses"].append({"group_id": camera_group["group_id"],
@@ -490,11 +705,32 @@ def configure_evidence_cameras(ctx: Any, trace: Any, out_dir: str | Path) -> dic
             union_presence[alias] = union_presence.get(alias, False) or bool(mask_row.get("framing_presence"))
     missing = sorted(alias for alias, present in union_presence.items() if not present)
     report["essential_current_roles"] = targets
+    report["overview_role_envelope"] = {"roles": list(envelope.get("roles", [])) if envelope else [],
+                                         "center": _jsonable(envelope.get("center")) if envelope else None,
+                                         "size": _jsonable(envelope.get("size")) if envelope else None,
+                                         "radius_m": envelope.get("radius") if envelope else None,
+                                         "geometry_source": "essential role bounds expanded by explicit waypoint extents",
+                                         "semantic_readability": "not_assessed"}
+    report["role_coverage_diagnostics"] = [{
+        "view_id": view["view_id"], "purpose": view["purpose"],
+        "framing_only": True,
+        "roles": view["rendered_presence"].get("roles", {}),
+        "missing_roles": sorted(alias for alias in targets
+                                if not view["rendered_presence"].get("roles", {}).get(alias, {}).get("framing_presence")),
+        "semantic_readability": "not_assessed",
+    } for view in selected]
     report["union_mask_coverage"] = {"roles": union_presence, "missing_roles": missing,
                                      "status": "covered" if targets and not missing else "incomplete"}
     report["selected_views"] = selected
+    overview = next((view for view in selected if view["purpose"] == "distant_room_overview"), None)
+    overview_visible = ({targets[alias] for alias, item in overview["rendered_presence"].get("roles", {}).items()
+                         if alias in targets and item.get("framing_presence")} if overview else set())
+    report["overview_visible_distinct_objects"] = len(overview_visible)
+    report["overview_minimum_distinct_objects"] = min(2, len(set(targets.values())))
     if not targets:
         report.update(status="rejected", error="no essential non-room-noise task roles for mask coverage")
+    elif len(overview_visible) < report["overview_minimum_distinct_objects"]:
+        report.update(status="rejected", error="debug overview does not frame multiple distinct task objects")
     elif missing:
         report.update(status="rejected", error="selected fixed-camera masks do not cover every essential current role")
     elif any(view["path"] is None for view in selected):

@@ -16,12 +16,12 @@ args=("$@")
 while (($#)); do
   case "$1" in
     --all) shift ;;
-    --cases|--seed) (($# >= 2)) || die "$1 needs a value"; shift 2 ;;
-    *) die "Supported options: --all, --cases H05-1,H04-2, --seed INTEGER. Default: H05-1 only." ;;
+    --cases|--seed|--scene-limit) (($# >= 2)) || die "$1 needs a value"; shift 2 ;;
+    *) die "Supported options: --all, --cases H05-1,H04-2, --seed INTEGER, --scene-limit 1..30. Default: H05-1 only." ;;
   esac
 done
 printf '\n[43] Checking source and mock contracts before starting Unity. No model environment is used.\n'
-run_python -m compileall -q runtime.py full_step_trace.py hard_context.py hard_contracts.py hard_scenarios.py hard_camera.py hard_export.py hard_generate.py
+run_python -m compileall -q runtime.py full_step_trace.py hard_context.py hard_navigation.py hard_inventory.py hard_scene_survey.py hard_contracts.py hard_scenarios.py hard_camera.py hard_export.py hard_generate.py
 for pattern in 'test_hard_*.py' 'test_full_step_trace.py' 'test_interactions.py' 'test_camera.py' 'test_nested_setup.py' 'test_offline_runner.py'; do
   run_python -m unittest discover -s tests -p "$pattern" -v || die "Preflight tests failed; Unity has not started. Return this log."
 done
@@ -52,11 +52,12 @@ root, archive_path, stage_log, project = map(Path, sys.argv[1:])
 (root / "_run").mkdir(exist_ok=True)
 shutil.copyfile(stage_log, root / "_run" / "stage_log_snapshot.txt")
 entries = [(p, "dataset/" + p.relative_to(root).as_posix()) for p in root.rglob("*") if p.is_file()]
-source_names = ["runtime.py", "full_step_trace.py", "hard_context.py", "hard_contracts.py", "hard_scenarios.py", "hard_camera.py",
+source_names = ["runtime.py", "full_step_trace.py", "hard_context.py", "hard_navigation.py", "hard_inventory.py", "hard_scene_survey.py", "hard_contracts.py", "hard_scenarios.py", "hard_camera.py",
                 "hard_export.py", "hard_generate.py", "interactions.py", "view_planning.py", "observation_views.py",
                 "nested_setup.py", "New-WebReview.ps1", "review_web/review.js", "config.json",
                 "docs/ai2thor_object_reference.md", "linux_server_operation/43_generate_hard_groups.sh",
-                "困难组逐题流程与全程采集核对_20261027.md", "linux_server_operation/44_困难组生成与网页审核.md"]
+                "困难组逐题流程与全程采集核对_20261027.md", "linux_server_operation/44_困难组生成与网页审核.md",
+                "linux_server_operation/45_repair_hard_capture.sh", "linux_server_operation/46_审核意见修复与重跑.md"]
 entries += [(project / name, "source/" + name) for name in source_names if (project / name).is_file()]
 manifest = [{"path": name, "bytes": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
             for p, name in entries]
