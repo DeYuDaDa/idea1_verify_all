@@ -27,7 +27,9 @@ class OfflineRunnerTests(unittest.TestCase):
             with self.assertRaises(StopBeforeProcessing):
                 runner._infer_one(None, Processor(), {"model_input": {}}, "cuda:0", 1,
                                   prompt_bundle=bundle)
-        self.assertEqual(captured, [{"role": "user", "content": [
+        # captured is a list of calls; each call receives a messages list.
+        self.assertEqual(len(captured), 1)
+        self.assertEqual(captured[0], [{"role": "user", "content": [
             {"type": "text", "text": bundle[0]},
         ]}])
 
