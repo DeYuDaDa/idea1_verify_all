@@ -60,14 +60,31 @@ source_names = ["runtime.py", "full_step_trace.py", "hard_context.py", "hard_con
 entries += [(project / name, "source/" + name) for name in source_names if (project / name).is_file()]
 manifest = [{"path": name, "bytes": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
             for p, name in entries]
+image_count = sum(1 for _, name in entries if name.startswith("dataset/") and name.lower().endswith(".png"))
+summary_path = root / "generation_summary.json"
+summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.is_file() else {}
+published = summary.get("published_case_count", 0)
+capture_status = ("candidates_pending_review"
+                  if published and published == len(summary.get("requested_cases", []))
+                  else "source_incomplete")
 with zipfile.ZipFile(archive_path, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=4, allowZip64=True) as bundle:
     for path, name in entries:
         bundle.write(path, name)
-    bundle.writestr("bundle_manifest.json", json.dumps({"model_called": False, "files": manifest},
+    bundle.writestr("bundle_manifest.json", json.dumps({"model_called": False, "files": manifest,
+                                                     "image_file_count": image_count,
+                                                     "published_case_count": published,
+                                                     "source_status": capture_status},
                                                      ensure_ascii=False, indent=2))
 print(json.dumps({"archive": str(archive_path), "data_root": str(root), "files": len(entries),
-                  "model_called": False}, ensure_ascii=False, indent=2))
+                  "image_file_count": image_count, "published_case_count": published,
+                  "source_status": capture_status, "model_called": False}, ensure_ascii=False, indent=2))
+if image_count == 0:
+    print("[43] NO IMAGES PRODUCED: diagnostic ZIP only. Read generation_summary.json; do not treat this as a generated dataset.", file=sys.stderr)
 PY
 printf '\n[43] Data: %s\nZIP: %s\nLog: %s\n' "$out" "$archive" "$_lso_log"
-printf '[43] Candidates still need human visual/answerability review; no model was run.\n'
+if [[ "$run_status" -eq 0 ]]; then
+  printf '[43] Candidates still need human visual/answerability review; no model was run.\n'
+else
+  printf '[43] Generation incomplete. ZIP preserves diagnostics and any partial candidates; it is not a completed dataset. No model was run.\n'
+fi
 exit "$run_status"

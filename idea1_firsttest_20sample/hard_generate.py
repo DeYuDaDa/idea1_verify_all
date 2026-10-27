@@ -26,6 +26,33 @@ COMMIT = "f0825767cd50d69f666c7f282e54abfe58f1e917"
 BUILD = f"thor-CloudRendering-{COMMIT}"
 
 
+def controller_launch_options(platform, build_cache, executable=None):
+    """Keep cached CloudRendering builds out of AI2-THOR's ExternalBuild branch.
+
+    In ai2thor 5.0.0 an explicit executable selects ExternalBuild/Linux64 even
+    when platform=CloudRendering was requested. Use the verified pinned cache
+    through find_build instead; never invent a DISPLAY value to hide this.
+    """
+    cache = Path(build_cache).expanduser().resolve()
+    options = {"build_cache_dir": cache, "commit_id": COMMIT}
+    if platform != "CloudRendering":
+        options["local_executable_path"] = executable
+        return options
+    pinned = cache / "releases" / BUILD / BUILD
+    if executable is not None and Path(executable).expanduser().resolve() != pinned:
+        raise ValueError("CloudRendering requires the existing pinned cache executable; "
+                         "a different local_executable_path would select ExternalBuild/Linux64 "
+                         "in ai2thor 5.0.0. No download or DISPLAY rewrite was attempted.")
+    data = pinned.parent / f"{BUILD}_Data"
+    if (not pinned.is_file() or pinned.stat().st_size == 0 or not os.access(pinned, os.X_OK)
+            or not data.is_dir() or not any(data.iterdir())):
+        raise RuntimeError(f"Pinned CloudRendering cache is incomplete: {pinned}; "
+                           "refusing to construct Controller or download a build")
+    # Deliberately omit local_executable_path: even the correct cached path
+    # would switch AI2-THOR to its ExternalBuild/Linux64 startup branch.
+    return options
+
+
 def plan(selected):
     return {
         "schema": "hard-plan/v1", "model_called": False, "simulator_started": False,
@@ -192,9 +219,11 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17):
         row = {"case_id": case.case_id, "scene": case.scene, "title": case.title,
                "status": "not_started", "published_inputs": []}
         try:
-            session = ControllerSession(scene=case.scene, platform=config.get("platform", "CloudRendering"),
+            platform = config.get("platform", "CloudRendering")
+            launch = controller_launch_options(platform, build_cache, executable)
+            session = ControllerSession(scene=case.scene, platform=platform,
                         width=config.get("width", 640), height=config.get("height", 480),
-                        build_cache_dir=build_cache, local_executable_path=executable, commit_id=COMMIT)
+                        **launch)
             trace = FullStepTrace(session, directory)
             trace.set_phase("初始化与原生搭建", public=False, kind="setup")
             trace.capture_current("原生初始化返回")
@@ -315,8 +344,18 @@ def main(argv=None):
         config["platform"] = args.platform
     result = generate(selected, args.out, config, build_cache=args.build_cache_dir,
                       executable=executable, seed=args.seed)
+    for row in result:
+        if not row["published_inputs"]:
+            print(f"[hard_generate] {row['case_id']} {row['status']}: {row.get('error', 'no published input')}",
+                  file=sys.stderr, flush=True)
+    image_count = sum(1 for path in args.out.rglob("*.png") if path.is_file())
     print(json.dumps({"out": str(args.out), "attempted": len(result),
+                      "not_attempted": len(selected) - len(result),
                       "published_cases": sum(bool(r["published_inputs"]) for r in result),
+                      "image_file_count": image_count,
+                      "source_status": "candidates_pending_review"
+                                       if len(result) == len(selected) and all(r["published_inputs"] for r in result)
+                                       else "source_incomplete",
                       "model_called": False}, ensure_ascii=False, indent=2))
     return 0 if len(result) == len(selected) and all(r["published_inputs"] for r in result) else 2
 

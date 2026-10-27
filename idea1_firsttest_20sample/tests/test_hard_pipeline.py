@@ -3,9 +3,11 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from hard_export import export_case, request_text, sha_file
-from hard_generate import _quarantine_partial_exports, plan, target_capture_diagnostics
+from hard_generate import (BUILD, COMMIT, _quarantine_partial_exports,
+                           controller_launch_options, plan, target_capture_diagnostics)
 from hard_scenarios import cases
 from offline_run_qwen import RunnerError, _check_public_model_input
 
@@ -43,6 +45,34 @@ def fixture_context():
 
 
 class HardPipelineTests(unittest.TestCase):
+    def test_cloud_launch_uses_verified_cache_not_external_build(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache = Path(temp)
+            executable = cache / "releases" / BUILD / BUILD
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b"mock executable; never started")
+            data = executable.parent / f"{BUILD}_Data"
+            data.mkdir()
+            (data / "asset").write_bytes(b"mock asset")
+            with patch("hard_generate.os.access", return_value=True):
+                for supplied in (None, executable):
+                    options = controller_launch_options("CloudRendering", cache, supplied)
+                    self.assertNotIn("local_executable_path", options)
+                    self.assertEqual(options["build_cache_dir"], cache.resolve())
+                    self.assertEqual(options["commit_id"], COMMIT)
+
+    def test_cloud_launch_rejects_missing_cache_and_external_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            cache = Path(temp)
+            with self.assertRaisesRegex(RuntimeError, "cache is incomplete"):
+                controller_launch_options("CloudRendering", cache)
+            with self.assertRaisesRegex(ValueError, "ExternalBuild/Linux64"):
+                controller_launch_options("CloudRendering", cache, cache / "other-executable")
+
+    def test_linux64_explicit_path_is_not_changed_by_cloud_fix(self):
+        options = controller_launch_options("Linux64", Path("cache"), Path("external"))
+        self.assertEqual(options["local_executable_path"], Path("external"))
+
     def test_all_twenty_candidates_are_listed_without_claiming_a_live_pass(self):
         result = plan(cases())
         self.assertEqual(len(result["cases"]), 20)
