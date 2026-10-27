@@ -6,6 +6,7 @@ import importlib.metadata
 import json
 import math
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,10 @@ class StepResult:
     event: Any
     metadata: dict[str, Any]
     record: dict[str, Any]
+    # False when a raised native call left ``controller.last_event`` pointing
+    # at the same event that was current before the call.
+    new_event_received: bool = True
+    native_error: str | None = None
 
 
 @dataclass
@@ -123,13 +128,14 @@ class ControllerSession:
         self.render_instance_segmentation = render_instance_segmentation
         self.installed_version = installed_version
         self.records: list[dict[str, Any]] = []
+        self._step_observers: list[Any] = []
+        self.observer_errors: list[dict[str, Any]] = []
         self._record_initialization()
 
-    def _record_initialization(self) -> None:
+    def _record_initialization(self, *, notify: bool = True) -> None:
         event = self.controller.last_event
         metadata = copy.deepcopy(event.metadata)
-        self.records.append(
-            {
+        record = {
                 "index": 0,
                 "time_utc": datetime.now(timezone.utc).isoformat(),
                 "action": "Initialize",
@@ -147,7 +153,35 @@ class ControllerSession:
                 "errorMessage": metadata.get("errorMessage", ""),
                 "sceneName": metadata.get("sceneName"),
             }
-        )
+        self.records.append(record)
+        if notify:
+            self._notify_step_observers(StepResult(event, metadata, copy.deepcopy(record)))
+
+    def add_step_observer(self, callback: Any) -> None:
+        """Observe each completed native call without changing its result."""
+        if callback not in self._step_observers:
+            self._step_observers.append(callback)
+
+    def remove_step_observer(self, callback: Any) -> None:
+        """Stop notifying ``callback``; removing an absent callback is harmless."""
+        try:
+            self._step_observers.remove(callback)
+        except ValueError:
+            pass
+
+    def _notify_step_observers(self, result: StepResult) -> None:
+        for callback in tuple(self._step_observers):
+            try:
+                callback(result)
+            except Exception as exc:
+                # A diagnostic observer must never mask a native exception or
+                # action failure. Keep a compact ledger for caller policy.
+                self.observer_errors.append({
+                    "step_index": result.record.get("index"),
+                    "action": result.record.get("action"),
+                    "observer": repr(callback),
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
 
     @staticmethod
     def _jsonable(value: Any) -> Any:
@@ -163,6 +197,8 @@ class ControllerSession:
 
     def step(self, action: str, *, raise_on_failure: bool = False, **kwargs: Any) -> StepResult:
         """Execute one action, ledger exact parameters and outcome, optionally raise."""
+        prior_event = getattr(self.controller, "last_event", None)
+        started = time.perf_counter()
         event = None
         call_error: Exception | None = None
         try:
@@ -180,6 +216,7 @@ class ControllerSession:
         record = {
             "index": len(self.records),
             "time_utc": datetime.now(timezone.utc).isoformat(),
+            "wall_time": time.perf_counter() - started,
             "action": action,
             "kwargs": self._jsonable(kwargs),
             "lastActionSuccess": metadata.get("lastActionSuccess"),
@@ -187,7 +224,11 @@ class ControllerSession:
             "sceneName": metadata.get("sceneName"),
         }
         self.records.append(record)
-        result = StepResult(event=event, metadata=metadata, record=copy.deepcopy(record))
+        fresh_event = call_error is None or (event is not None and event is not prior_event)
+        result = StepResult(event=event, metadata=metadata, record=copy.deepcopy(record),
+                            new_event_received=fresh_event,
+                            native_error=(f"{type(call_error).__name__}: {call_error}" if call_error else None))
+        self._notify_step_observers(result)
         if call_error is not None or (raise_on_failure and metadata.get("lastActionSuccess") is False):
             raise ActionFailure(result)
         return result
@@ -209,16 +250,38 @@ class ControllerSession:
 
     def reset(self, scene: str) -> StepResult:
         """Reset the real simulator; caller owns any previous case's snapshots."""
-        event = self.controller.reset(
-            scene=scene, renderDepthImage=self.render_depth,
-            renderInstanceSegmentation=self.render_instance_segmentation,
-            fieldOfView=self.field_of_view,
-        )
+        prior_event = getattr(self.controller, "last_event", None)
+        started = time.perf_counter()
+        try:
+            event = self.controller.reset(
+                scene=scene, renderDepthImage=self.render_depth,
+                renderInstanceSegmentation=self.render_instance_segmentation,
+                fieldOfView=self.field_of_view,
+            )
+        except Exception as exc:
+            event = getattr(self.controller, "last_event", None)
+            metadata = copy.deepcopy(event.metadata) if event is not None else {}
+            record = {
+                "index": len(self.records), "time_utc": datetime.now(timezone.utc).isoformat(),
+                "wall_time": time.perf_counter() - started,
+                "action": "Reset", "kwargs": {"scene": scene},
+                "lastActionSuccess": metadata.get("lastActionSuccess"),
+                "errorMessage": metadata.get("errorMessage") or f"{type(exc).__name__}: {exc}",
+                "sceneName": metadata.get("sceneName"),
+            }
+            self.records.append(record)
+            result = StepResult(event, metadata, copy.deepcopy(record),
+                                new_event_received=event is not None and event is not prior_event,
+                                native_error=f"{type(exc).__name__}: {exc}")
+            self._notify_step_observers(result)
+            raise
         self.scene = scene
         self.records = []
-        self._record_initialization()
+        self._record_initialization(notify=False)
+        self.records[-1]["wall_time"] = time.perf_counter() - started
         metadata = copy.deepcopy(event.metadata)
         result = StepResult(event, metadata, copy.deepcopy(self.records[-1]))
+        self._notify_step_observers(result)
         if not metadata.get("lastActionSuccess", False):
             raise ActionFailure(result)
         return result

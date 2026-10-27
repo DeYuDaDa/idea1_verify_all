@@ -65,6 +65,9 @@ def _json_read(path: Path) -> Any:
 def _check_public_model_input(model_input: Any, source: Path) -> dict[str, Any]:
     if not isinstance(model_input, dict):
         raise RunnerError(f"model_input must be an object: {source}")
+    if str(model_input.get("protocol", "")).startswith("hard-selective-"):
+        raise RunnerError("Hard-group inputs use frozen prepared_requests; this legacy Qwen runner cannot "
+                          "serialize their full history/identity/state schema. No inference was started.")
     # Reuse only the public-data leak scanner; it never opens any gold files.
     from exporter import _scan_for_public_leaks
     leaks = _scan_for_public_leaks(model_input)
