@@ -43,11 +43,12 @@ function Find-SourceRoot([string] $Directory) {
     $matches = @(
         $folders | Where-Object {
             (Test-Path -LiteralPath (Join-Path $_ 'data/input') -PathType Container) -or
+            (Test-Path -LiteralPath (Join-Path $_ 'generation_summary.json') -PathType Leaf) -or
             (Test-Path -LiteralPath (Join-Path $_ 'observations/attempts') -PathType Container)
         } | Sort-Object -Property Length, { $_ }
     )
     if ($matches.Count -eq 0) {
-        throw '未找到 data/input 或 observations/attempts；压缩包可能不是该网页审核脚本的输入数据。'
+        throw '未找到正式输入 data/input、生成报告 generation_summary.json 或机制记录 observations/attempts；请确认压缩包内容。'
     }
     if ($matches.Count -gt 1) {
         Write-Host "检测到 $($matches.Count) 个候选数据根目录，请明确选择一个，避免混用不同批次：" -ForegroundColor Yellow
@@ -136,6 +137,10 @@ try {
     Write-Host '[2/3] 正在寻找数据根目录 ...' -ForegroundColor Cyan
     $sourceRoot = Find-SourceRoot $scanDirectory
     Write-Host "      SourceRoot = $sourceRoot"
+    if (-not (Test-Path -LiteralPath (Join-Path $sourceRoot 'data/input') -PathType Container) -and
+        (Test-Path -LiteralPath (Join-Path $sourceRoot 'generation_summary.json') -PathType Leaf)) {
+        Write-Host '      本包没有正式模型输入，将根据生成报告展示未发布尝试和已有调试画面。' -ForegroundColor Yellow
+    }
     Write-Host "      OutputRoot = $output"
     Write-Host "      BatchName  = $batchLabel"
     Write-Host '      正在生成静态审核网页 ...'
@@ -172,10 +177,13 @@ try {
     if($invalidNative){$incomplete=$true}
     Write-Host ''
     if($incomplete){
-        Write-Host '========== 源图片或原生测量不合格：仅生成诊断网页 ==========' -ForegroundColor Red
-        Write-Host '这批不是完整可用的视觉数据。重新运行导出器无法补出服务器未生成的图片。' -ForegroundColor Red
+        Write-Host '========== 数据构造、图片或原生测量未完成：保留诊断网页 ==========' -ForegroundColor Red
+        Write-Host '这批不是完整可用的数据。请分别查看构造是否完成、已有图片是否齐全；重新生成网页不能补做服务器上的动作。' -ForegroundColor Red
         if($invalidNative){Write-Host "原始运行记录判为无效的原生测量：$invalidNative 条。" -ForegroundColor Red}
         foreach($batch in $manifest.batches){
+            if($batch.PSObject.Properties.Name -contains 'generation_incomplete' -and $batch.generation_incomplete){
+                Write-Host "正式记录 $($batch.records) 条；未发布尝试 $($batch.diagnostic_attempts) 条。请在网页中查看具体失败原因。" -ForegroundColor Yellow
+            }
             if($batch.PSObject.Properties.Name -contains 'media_quality'){
                 $q=$batch.media_quality
                 Write-Host "可查看图片引用 $($q.available_image_refs)；生产失败 $($q.generation_failed_items)；未记路径 $($q.path_not_recorded_items)；有路径但缺文件 $($q.missing_files)；路径不兼容 $($q.invalid_paths)。" -ForegroundColor Yellow

@@ -95,7 +95,7 @@ class NativeNavigator:
             if abs(delta) < 0.15:
                 return
             self._step("RotateRight" if delta > 0 else "RotateLeft",
-                       degrees=min(self.angle_step, abs(delta)))
+                       degrees=round(min(self.angle_step, abs(delta)), 1))
         raise NavigationUnavailable("Native rotation did not reach requested yaw")
 
     def _look(self, horizon):
@@ -105,7 +105,10 @@ class NativeNavigator:
             if abs(delta) < 0.15:
                 return
             self._step("LookDown" if delta > 0 else "LookUp",
-                       degrees=min(self.look_step, abs(delta)))
+                       # THOR accepts degrees only in 0.1-degree increments.
+                       # Geometry produces arbitrary atan2 residuals; quantize
+                       # the command while retaining the measured-state loop.
+                       degrees=round(min(self.look_step, abs(delta)), 1))
         raise NavigationUnavailable("Native look did not reach requested horizon")
 
     def _walk(self, point):

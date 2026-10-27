@@ -93,8 +93,14 @@ for($bi=0;$bi -lt $sources.Count;$bi++){
         }
         $row.src=$assets[$h];$row.sha256=$h;return $row
     }
-    if(Test-Path -LiteralPath (Join-Path $source 'data/input')){
-        $mode='Dataset';$files=@(Get-ChildItem -LiteralPath (Join-Path $source 'data/input') -Filter '*.json' -File|Sort-Object Name)
+    if((Test-Path -LiteralPath (Join-Path $source 'data/input') -PathType Container) -or
+       (Test-Path -LiteralPath (Join-Path $source 'generation_summary.json') -PathType Leaf)){
+        # An all-failed generation need not create data/input at all. Its summary
+        # and private timelines are valid diagnostic inputs, never formal QA.
+        $mode='Dataset';$files=@()
+        if(Test-Path -LiteralPath (Join-Path $source 'data/input') -PathType Container){
+            $files=@(Get-ChildItem -LiteralPath (Join-Path $source 'data/input') -Filter '*.json' -File|Sort-Object Name)
+        }
         foreach($file in $files){
             $r=Read-Json $file.FullName;$sourceHash=Add-Source $file.FullName;$mi=Value $r 'model_input';if(-not $mi){throw "No model_input: $file"}
             if($mi -isnot [Collections.IDictionary]){throw "Unsupported model_input schema: $file"}
@@ -175,6 +181,9 @@ for($bi=0;$bi -lt $sources.Count;$bi++){
         if(Test-Path -LiteralPath $summaryPath -PathType Leaf){
             $summary=Read-Json $summaryPath;$null=Add-Source $summaryPath
             $requestedCases=@(Value $summary 'requested_cases' @());$attempts=@(Value $summary 'attempts' @())
+            if(-not $files.Count -and (-not $requestedCases.Count -or -not $attempts.Count)){
+                throw "No formal inputs and no usable requested_cases/attempts in generation_summary.json: $source"
+            }
             $publishedCaseCount=[int](Value $summary 'published_case_count' 0)
             if($requestedCases.Count -and $publishedCaseCount -lt $requestedCases.Count){$generationIncomplete=$true}
             for($ai=0;$ai -lt $attempts.Count;$ai++){
@@ -262,4 +271,4 @@ $manifest=[ordered]@{schema='scene-review-site/v1';created_utc=[DateTime]::UtcNo
 Write-Text (Join-Path $output 'site_manifest.json') ((ConvertTo-Json -InputObject $manifest -Depth 30)+"`n")
 Write-Text (Join-Path $output '打开方式.txt') "双击 index.html，用新版 Chrome 或 Edge 打开。全部资源在本目录，无需联网或启动服务器。`n审核结果存于当前浏览器；结束时点击“导出审核结果”保留 JSON。换浏览器或移动目录后可恢复审核。`n旧批次请求文本只能重建；机制探测没有模型输入或正式题目。`n请移动整个目录，不要只复制 index.html。`n"
 Write-Output (Join-Path $output 'index.html')
-if($sourceIncomplete){Write-Warning '源数据图片不完整：已生成诊断网页，不能将其视为可用的完整视觉数据。请查看 site_manifest.json 的 media_quality；重建网页不会补出未生成的图片。'}
+if($sourceIncomplete){Write-Warning '源数据存在未完成的构造或图片异常：已保留诊断网页。请分别查看 generation_incomplete、diagnostic_attempts 和 media_quality；已有图片齐全不等于题目构造完成，重建网页不能补做原生动作。'}

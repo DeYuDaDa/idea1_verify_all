@@ -142,6 +142,9 @@ try {
     Assert ($js.Contains('S 是有意设置的纯文本状态诊断') -and $js.Contains('capture-views') -and $js.Contains('V 视觉证据 · 主审候选')) 'reviewer must explain S text-only intent, V priority, and synchronized grouped views'
 
     $allFailed=New-FailureOnlyFixture 'all-failed-generation'
+    # The real generator does not create data/input before the first publication.
+    # Preserve that layout instead of masking the entrypoint bug with an empty dir.
+    Remove-Item -LiteralPath (Join-Path $allFailed.source 'data/input')
     Invoke-Review $allFailed
     $failedBatchText=Get-Content -LiteralPath (Join-Path $allFailed.output 'batches.js') -Raw -Encoding UTF8
     $failedBatchJson=$failedBatchText -replace '^window\.REVIEW_BATCHES\s*=\s*','' -replace ';\s*$',''

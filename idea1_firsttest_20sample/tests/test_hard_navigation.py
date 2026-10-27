@@ -27,6 +27,9 @@ class NavigationSession:
         if action.startswith("Rotate"):
             agent["rotation"]["y"] += kwargs["degrees"] * (1 if action == "RotateRight" else -1)
         elif action.startswith("Look"):
+            degrees = kwargs["degrees"]
+            if abs(degrees * 10 - round(degrees * 10)) > 1e-6:
+                raise AssertionError("THOR requires look degrees to be a multiple of 0.1")
             agent["cameraHorizon"] += kwargs["degrees"] * (1 if action == "LookDown" else -1)
         elif action == "MoveAhead":
             yaw = math.radians(agent["rotation"]["y"])
@@ -36,6 +39,18 @@ class NavigationSession:
 
 
 class HardNavigationTests(unittest.TestCase):
+    def test_geometry_angles_are_quantized_before_native_commands(self):
+        session = NavigationSession()
+        navigator = NativeNavigator(SimpleNamespace(session=session, navigation_attempts=[]))
+        navigator._look(23.456789)
+        self.assertLess(abs(session.metadata["agent"]["cameraHorizon"] - 23.456789), .15)
+        navigator._look(-17.234567)
+        self.assertLess(abs(session.metadata["agent"]["cameraHorizon"] + 17.234567), .15)
+        navigator._rotate(31.234567)
+        self.assertTrue(all(abs(row["kwargs"]["degrees"] * 10 -
+                                round(row["kwargs"]["degrees"] * 10)) < 1e-6
+                            for row in session.records))
+
     def test_grid_route_avoids_absent_nodes_instead_of_cutting_through_obstacle(self):
         points = [{"x": x, "y": 0., "z": z} for x, z in
                   ((0., 0.), (0., .25), (.25, .25), (.5, .25), (.5, 0.))]
