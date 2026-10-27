@@ -42,6 +42,12 @@ def make_session(event=None):
     session = ControllerSession.__new__(ControllerSession)
     session.controller = MockController(event or make_event())
     session.scene = "MockScene"
+    # __new__ skips the real constructor (and therefore Unity). Supply its
+    # configuration fields so reset can record an authentic Initialize ledger.
+    session.platform = "CloudRendering"
+    session.width = 3
+    session.height = 2
+    session.quality = "Low"
     session.render_depth = False
     session.render_instance_segmentation = True
     session.field_of_view = 75
@@ -80,6 +86,12 @@ class FullStepTraceTests(unittest.TestCase):
             self.assertEqual(rows[0]["action_index"], 0)
             self.assertEqual(rows[1]["action_index"], 0)
             self.assertEqual(rows[1]["reset_index"], 1)
+            self.assertEqual(session.records[0]["kwargs"], {
+                "scene": "MockScene", "platform": "CloudRendering",
+                "width": 3, "height": 2, "fieldOfView": 75, "quality": "Low",
+                "renderDepthImage": False, "renderInstanceSegmentation": True,
+            })
+            self.assertEqual(session.observer_errors, [])
             trace.finish()
 
     def test_exact_pixel_rle_retains_reappearance_and_phase_boundaries(self):
