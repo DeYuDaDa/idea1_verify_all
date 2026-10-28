@@ -152,10 +152,27 @@ class NativeNavigator:
         return Interactions._rendered_target_bbox(result, object_id) is not None
 
     def _near(self, obj):
+        if obj.get("objectType") in {"CounterTop", "DiningTable", "KitchenIsland"}:
+            # Native metadata.distance measures the object's pivot, which can
+            # be far from a usable edge of a long surface. Still require a
+            # rendered surface in _visible and a successful native PutObject;
+            # this horizontal bounds test alone never approves a placement.
+            return distance_to_bounds(xyz(self._agent()), obj) <= 1.25
         measured = obj.get("distance")
         if isinstance(measured, (int, float)):
             return float(measured) <= 1.45
         return distance_to_bounds(xyz(self._agent()), obj) <= 1.25
+
+    def _approach_evidence(self, object_id):
+        obj = self.ctx.obj(object_id)
+        near = self._near(obj)
+        visible = self._visible(object_id)
+        return {"near": near, "rendered_visible": visible,
+                "native_pivot_distance": obj.get("distance"),
+                "horizontal_distance_to_bounds": distance_to_bounds(xyz(self._agent()), obj),
+                "proximity_rule": ("surface_bounds_and_rendered_mask" if obj.get("objectType")
+                                   in {"CounterTop", "DiningTable", "KitchenIsland"}
+                                   else "object_distance_and_rendered_bbox")}
 
     def navigate(self, object_id, purpose="inspect"):
         self.action_count = 0
@@ -168,7 +185,8 @@ class NativeNavigator:
         try:
             obj = self.ctx.obj(object_id)
             self._aim(obj)
-            if self._near(self.ctx.obj(object_id)) and self._visible(object_id):
+            diagnostic["initial_approach"] = self._approach_evidence(object_id)
+            if diagnostic["initial_approach"]["near"] and diagnostic["initial_approach"]["rendered_visible"]:
                 diagnostic["status"] = "already_near_and_visible"
                 return self.last_result
             positions_result = self._step("GetReachablePositions")
@@ -205,10 +223,13 @@ class NativeNavigator:
                     for waypoint in route:
                         self._walk(waypoint)
                     self._aim(self.ctx.obj(object_id))
-                    if self._near(self.ctx.obj(object_id)) and self._visible(object_id):
+                    attempt["approach"] = self._approach_evidence(object_id)
+                    if attempt["approach"]["near"] and attempt["approach"]["rendered_visible"]:
                         diagnostic["status"] = "arrived_and_visible"
                         return self.last_result
-                    attempt["error"] = "Target absent from rendered first-person view"
+                    attempt["error"] = ("Target not near under the recorded proximity rule"
+                                        if not attempt["approach"]["near"]
+                                        else "Target absent from rendered first-person view")
                 except (ActionFailure, NavigationUnavailable) as exc:
                     attempt["error"] = f"{type(exc).__name__}: {exc}"
             raise NavigationUnavailable(f"Cannot establish a native first-person approach to {object_id}")

@@ -39,6 +39,32 @@ class NavigationSession:
 
 
 class HardNavigationTests(unittest.TestCase):
+    def test_long_surface_uses_reachable_edge_not_distant_pivot(self):
+        session = NavigationSession()
+        session.metadata["agent"]["position"] = {"x": .25, "y": .901, "z": -1.75}
+        navigator = NativeNavigator(SimpleNamespace(session=session, navigation_attempts=[]))
+        surface = {"objectType": "CounterTop", "distance": 2.18723,
+                   "position": {"x": -1.868, "y": .9469, "z": -1.206},
+                   "axisAlignedBoundingBox": {
+                       "center": {"x": -1.45, "y": .90945, "z": -1.19227},
+                       "size": {"x": 1.5, "y": .0169, "z": 3.21545}}}
+        self.assertTrue(navigator._near(surface))
+        # Small movable objects keep the native distance criterion.
+        self.assertFalse(navigator._near({**surface, "objectType": "Bowl"}))
+        surface["axisAlignedBoundingBox"]["center"]["x"] = -4.
+        self.assertFalse(navigator._near(surface))
+
+    def test_surface_proximity_does_not_replace_rendered_visibility(self):
+        session = NavigationSession()
+        obj = {"objectType": "CounterTop", "distance": 2.,
+               "position": {"x": .8, "y": 0., "z": 0.}}
+        navigator = NativeNavigator(SimpleNamespace(session=session, navigation_attempts=[], obj=lambda _: obj))
+        navigator._visible = lambda _: False
+        evidence = navigator._approach_evidence("counter")
+        self.assertTrue(evidence["near"])
+        self.assertFalse(evidence["rendered_visible"])
+        self.assertEqual(evidence["proximity_rule"], "surface_bounds_and_rendered_mask")
+
     def test_geometry_angles_are_quantized_before_native_commands(self):
         session = NavigationSession()
         navigator = NativeNavigator(SimpleNamespace(session=session, navigation_attempts=[]))

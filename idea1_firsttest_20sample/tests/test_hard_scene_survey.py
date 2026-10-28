@@ -21,7 +21,7 @@ class HardSurveyTests(unittest.TestCase):
                 pass
         def prepare(session, groups, **kwargs):
             session.objects.append({"objectId": "Mug2-native", "objectType": "Mug", "canFillWithLiquid": True})
-            return {"status": "added_and_verified", "action_receipts": [{"action": "CreateObjectAtLocation"}]}
+            return {"status": "added_and_verified", "action_receipts": [{"action": "InitialRandomSpawn"}]}
         with tempfile.TemporaryDirectory() as temp, \
              patch("hard_scene_survey.ControllerSession", Controller), \
              patch("hard_scene_survey.ensure_native_inventory", side_effect=prepare) as native:
