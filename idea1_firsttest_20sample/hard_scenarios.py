@@ -59,6 +59,31 @@ def _role(ctx: Any, alias: str, object_type: str, capability=None, *, exclude=()
         raise HardConstructionError(f"Cannot bind existing {object_type} as {alias}: {exc}") from exc
 
 
+def _placement_failure_evidence(ctx: Any, role: str, slot: str, destination: str, attempts: list):
+    """Record measured geometry without guessing which collider blocked PutObject."""
+    snapshot = ctx.session.snapshot()
+    objects = snapshot.get("objects", [])
+    parent = next((obj for obj in objects if obj.get("objectId") == destination), {})
+    position = (parent.get("axisAlignedBoundingBox") or {}).get("center") or parent.get("position")
+    def distance(obj):
+        candidate = (obj.get("axisAlignedBoundingBox") or {}).get("center") or obj.get("position")
+        if not isinstance(position, dict) or not isinstance(candidate, dict):
+            return float("inf")
+        try:
+            return math.dist(tuple(float(position[k]) for k in ("x", "y", "z")),
+                             tuple(float(candidate[k]) for k in ("x", "y", "z")))
+        except (KeyError, TypeError, ValueError):
+            return float("inf")
+    nearby = sorted(objects, key=lambda obj: (distance(obj), str(obj.get("objectId", ""))))[:12]
+    fields = ("objectId", "objectType", "position", "rotation", "axisAlignedBoundingBox",
+              "parentReceptacles", "receptacleObjectIds", "isPickedUp", "isMoving")
+    ctx.check(f"native_placement_failure_{role}_{slot}", False, {
+        "held_source_id": ctx.roles[role], "destination_id": destination,
+        "inventory": ctx.session.inventory(), "native_attempts": attempts,
+        "nearby_objects": [{key: obj.get(key) for key in fields} for obj in nearby],
+        "interpretation": "Native placement failed. Proximity/AABBs identify inspection candidates, not a proven blocking collider."})
+
+
 def _move(ctx: Any, role: str, slot: str):
     """Move an existing object with native pickup/put; callback owns geometry."""
     adapter = getattr(ctx, "group_spec", None)
@@ -97,6 +122,7 @@ def _move(ctx: Any, role: str, slot: str):
             if not held:
                 break
         if result is None or result.record.get("lastActionSuccess") is not True:
+            _placement_failure_evidence(ctx, role, slot, destination, attempts)
             raise HardConstructionError(f"Native PutObject failed for {role} -> {slot}; attempts={attempts!r}")
         ctx.ops.settle(steps=4)
         child = ctx.obj(role)
@@ -158,6 +184,8 @@ def _choose_h03_buffer(ctx: Any) -> str:
 
 def _native_setup_place(ctx: Any, role: str, slot: str):
     """Prehistory placement through the existing bounded native placement helper."""
+    if getattr(ctx, "history_started", False):
+        raise HardConstructionError("Native setup placement is forbidden after public history has started")
     oid = ctx.roles[role]
     parent = ctx.roles.get(slot) or _waypoint_id(ctx.waypoints.get(slot))
     if not parent:
@@ -168,8 +196,15 @@ def _native_setup_place(ctx: Any, role: str, slot: str):
     if ctx.session.inventory():
         raise HardConstructionError("Setup placement requires empty native hand inventory")
     try:
-        ctx.ops.place_initial(oid, parent)
-        ctx.ops.settle(steps=4)
+        marker = getattr(ctx, "mark_setup_stage", None)
+        if callable(marker):
+            marker(f"私有初始放置 {role} -> {slot}", kind="setup")
+        restore = getattr(ctx, "restore_native_object", None)
+        if callable(restore):
+            restore(oid, parent, settle_steps=4)
+        else:
+            ctx.ops.place_initial(oid, parent)
+            ctx.ops.settle(steps=4)
     except Exception as exc:
         raise HardConstructionError(f"Native prehistory placement {role} -> {slot} failed: {exc}") from exc
     if parent not in (ctx.obj(role).get("parentReceptacles") or []):
@@ -179,6 +214,9 @@ def _native_setup_place(ctx: Any, role: str, slot: str):
 def _calibrate_forward(ctx: Any, role: str, origin: str, destination: str,
                        *, restore_to: str | None = None):
     """Exercise a required native placement, then restore with setup placement."""
+    marker = getattr(ctx, "mark_setup_stage", None)
+    if callable(marker):
+        marker(f"私有原生可行性校准 {role}: {origin} -> {destination}", kind="calibration")
     if not _relation(ctx, role, origin):
         raise HardConstructionError(f"Cannot calibrate {role}: expected native origin {origin} is absent")
     _move(ctx, role, destination)
@@ -216,11 +254,42 @@ def _find_h03_mappings(ctx: Any) -> list[tuple[str, str]]:
     return distinct
 
 
+def _h03_mapping_distance(ctx: Any, left: tuple[str, str], right: tuple[str, str]) -> float:
+    a, b = ctx.obj(left[1]).get("position"), ctx.obj(right[1]).get("position")
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return -1.0
+    return math.dist(tuple(float(a[k]) for k in ("x", "y", "z")),
+                     tuple(float(b[k]) for k in ("x", "y", "z")))
+
+
+def _xz_aabb_overlap(left: dict, right: dict) -> bool | None:
+    """Return measured positive-area x/z AABB overlap; None means unavailable."""
+    a = left.get("axisAlignedBoundingBox") or {}
+    b = right.get("axisAlignedBoundingBox") or {}
+    if not (isinstance(a.get("center"), dict) and isinstance(a.get("size"), dict)
+            and isinstance(b.get("center"), dict) and isinstance(b.get("size"), dict)):
+        return None
+    return all(abs(float(a["center"][k]) - float(b["center"][k]))
+               < (float(a["size"][k]) + float(b["size"][k])) / 2 - 1e-4
+               for k in ("x", "z"))
+
+
 def _prepare_h03_native(ctx: Any, variant: int):
+    marker = getattr(ctx, "mark_setup_stage", None)
+    if callable(marker):
+        marker("H03私有原生身份映射、初始关火与摆放", kind="setup")
     mappings = _find_h03_mappings(ctx)
     if len(mappings) < 2:
         raise HardConstructionError(f"H03 needs two distinct native knob-to-burner mappings; found {mappings!r}")
-    (ka, ba), (kb, bb) = mappings[:2]
+    original_distance = _h03_mapping_distance(ctx, mappings[0], mappings[1])
+    choices = [(left, right) for i, left in enumerate(mappings)
+               for right in mappings[i + 1:]
+               if left[0] != right[0] and left[1] != right[1]]
+    if not choices:
+        raise HardConstructionError(f"H03 has no pair of distinct knob/burner mappings: {mappings!r}")
+    (ka, ba), (kb, bb) = max(choices, key=lambda pair: (
+        _h03_mapping_distance(ctx, pair[0], pair[1]), pair[0], pair[1]))
+    selected_distance = _h03_mapping_distance(ctx, (ka, ba), (kb, bb))
     for alias, oid in (("KA", ka), ("BA", ba), ("KB", kb), ("BB", bb)):
         ctx.bind(alias, oid)
         _set_waypoint(ctx, alias, ctx.obj(alias))
@@ -236,12 +305,21 @@ def _prepare_h03_native(ctx: Any, variant: int):
     _choose_h03_buffer(ctx)
     _native_setup_place(ctx, "X", "BA")
     _native_setup_place(ctx, "Y", "BB")
+    overlap = _xz_aabb_overlap(ctx.obj("X"), ctx.obj("Y"))
+    ctx.check("H03_initial_container_xz_aabb_diagnostic_recorded", True,
+              {"overlap": overlap, "selected_mapping_distance_m": selected_distance,
+               "first_mapping_pair_distance_m": original_distance,
+               "selected_mappings": [(ka, ba), (kb, bb)],
+               "mapping_search_exhaustive": True,
+               "aabb_overlap_is_not_native_collider_intersection": True})
     for role in ("X", "Y"):
         if _temperature(ctx.obj(role)) != "RoomTemp":
             raise HardConstructionError(f"H03 needs {role} at native RoomTemp before history")
     # Calibrate the same six native moves as one swap plus restoration. This
     # includes the cross-burner placements Y->BA and X->BB that buffer-only
     # roundtrips would miss.
+    if callable(marker):
+        marker("H03私有原生换位与恢复可行性校准", kind="calibration")
     _h03_native_cycle(ctx, "swap", public=False)
     _h03_native_cycle(ctx, "restore", public=False)
     ctx.require(_relation(ctx, "X", "BA") and _relation(ctx, "Y", "BB"),
@@ -261,7 +339,8 @@ def _h03_native_cycle(ctx: Any, cycle: str, *, public: bool = True):
         _move(ctx, "Y", "BB")
     else:
         raise HardConstructionError(f"Unknown H03 placement cycle {cycle!r}")
-    ctx.phase("H03历史换位后稳定等待（4次原生Pass）", public=public, kind="history")
+    ctx.phase("H03换位后稳定等待（4次原生Pass）", public=public,
+              kind="history" if public else "calibration")
     _settle(ctx, 4)
     ctx.require(not ctx.session.inventory(), f"H03 {cycle} left an object held")
     ctx.require(all(ctx.obj(k).get("isToggled") is False for k in ("KA", "KB")),
@@ -608,21 +687,35 @@ def _h04(ctx: Any, variant: int):
         raise HardConstructionError(f"Native prehistory nested setup failed: {type(exc).__name__}: {exc}") from exc
     for alias, nested_role in (("P", "outer"), ("B", "inner"), ("X", "content")):
         ctx.bind(alias, ctx.roles[nested_role])
+    marker = getattr(ctx, "mark_setup_stage", None)
+    if callable(marker):
+        marker("H04完整嵌套原生初始布局完成", kind="setup")
     # Calibrate only the forward sequence required by this variant. Restore
     # with setup placement so preflight does not invent extra public-history
     # PutObject routes.
-    if variant in (1, 2):
+    if variant == 1:
+        # The prior native trace shows X -> B fails with "No valid positions".
+        # Do not spend a private duplicate attempt on the same immutable nested
+        # layout: the single intended public-history attempt below is the
+        # diagnostic, and its failure remains in the public action ledger.
+        if callable(marker):
+            marker("H04-1跳过已知失败的私有Apple回碗重复校准；保留一次公开原生诊断", kind="calibration")
+    elif variant == 2:
+        if callable(marker):
+            marker("H04-2私有原生可行性校准", kind="calibration")
         _move(ctx, "X", "h04_external")
-        if variant == 1:
-            _move(ctx, "X", "B")
-        else:
-            _native_setup_place(ctx, "X", "B")
+        _native_setup_place(ctx, "X", "B")
     else:
-        _move(ctx, "B", "h04_external")
-        if variant == 4:
-            _move(ctx, "X", "P")
-            _native_setup_place(ctx, "X", "B")
-        _native_setup_place(ctx, "B", "P")
+        if variant == 3:
+            if callable(marker):
+                marker("H04-3私有原生可行性校准", kind="calibration")
+            _move(ctx, "B", "h04_external")
+            _native_setup_place(ctx, "B", "P")
+        # H04-4 starts public history directly after nested setup. Earlier
+        # prehistory succeeded at B -> external and X -> P individually but
+        # its native restoration lost the nested relation. H04-3 already
+        # supplies evidence for the Bowl excursion, so avoid this invalid
+        # duplicate calibration/restoration chain.
     if not (_relation(ctx, "B", "P") and _relation(ctx, "X", "B")):
         raise HardConstructionError("H04 prehistory endpoint calibration did not restore the nested chain")
     _start(ctx, "公开身份规则：P 是外盘、B 是碗、X 是苹果；只按实际成功的原生搬运更新位置。")
@@ -632,7 +725,7 @@ def _h04(ctx: Any, variant: int):
         _phase(ctx, "H04 remove Apple from Bowl")
         _move(ctx, "X", "h04_external")
         if variant == 1:
-            _phase(ctx, "H04 return same Apple to Bowl")
+            _phase(ctx, "H04 return same Apple to Bowl", kind="history")
             _move(ctx, "X", "B")
     elif variant in (3, 4):
         _phase(ctx, "H04 move Bowl with Apple to external surface")
@@ -706,13 +799,28 @@ def _natural_cool_h05(ctx: Any) -> dict:
 
 
 def _prepare_h05_native(ctx: Any, variant: int):
+    marker = getattr(ctx, "mark_setup_stage", None)
+    if callable(marker):
+        marker("H05私有原生基线与外部位置布局", kind="setup")
     _role(ctx, "Z", "Potato", ("pickupable", "cookable"))
     _role(ctx, "Microwave", "Microwave", ("toggleable", "openable", "receptacle"))
     surfaces = _surface_candidates(ctx)
-    if len(surfaces) < 2:
-        raise HardConstructionError("H05 requires separate native cooling C and final exterior E positions")
+    needs_final_exterior = variant in (3, 4)
+    if len(surfaces) < (2 if needs_final_exterior else 1):
+        raise HardConstructionError("H05 lacks the native exterior surfaces actually used by this variant")
+    # The previous x/z sort picked a distant, high counter first in FloorPlan1;
+    # carrying the Potato there could not establish a visible native approach.
+    # Prefer two distinct existing surfaces nearest the actual Microwave, which
+    # bounds the carrying route and keeps the inside/outside contrast local.
+    microwave_position = ctx.obj("Microwave").get("position")
+    if isinstance(microwave_position, dict):
+        surfaces.sort(key=lambda row: (
+            math.dist(tuple(float(microwave_position[k]) for k in ("x", "y", "z")),
+                      tuple(float(row["position"][k]) for k in ("x", "y", "z"))),
+            str(row.get("objectId", ""))))
     _set_waypoint(ctx, "cooling_C", surfaces[0])
-    _set_waypoint(ctx, "final_E", surfaces[1])
+    if needs_final_exterior:
+        _set_waypoint(ctx, "final_E", surfaces[1])
     ctx.ops.set_toggle(ctx.roles["Microwave"], False)
     ctx.ops.set_open(ctx.roles["Microwave"], True)
     z = ctx.obj("Z")
@@ -739,7 +847,10 @@ def _h05_cook_history_native(ctx: Any):
 def _h05(ctx: Any, variant: int):
     _prepare_h05_native(ctx, variant)
     _calibrate_forward(ctx, "Z", "cooling_C", "Microwave")
-    _calibrate_forward(ctx, "Z", "cooling_C", "final_E")
+    # Inside-ending variants never use final_E. Requiring that unrelated route
+    # caused the old H05-1/2 batch to fail before its actual story even started.
+    if variant in (3, 4):
+        _calibrate_forward(ctx, "Z", "cooling_C", "final_E")
     ctx.require(ctx.obj("Z").get("isCooked") is False
                 and _temperature(ctx.obj("Z")) == "RoomTemp"
                 and _relation(ctx, "Z", "cooling_C"),

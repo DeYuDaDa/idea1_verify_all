@@ -16,6 +16,8 @@ from hard_camera import CameraPreflightError, audit_fixed_views, configure_evide
 from hard_context import HardContext
 from hard_navigation import NavigationUnavailable
 from hard_scene_survey import survey_scenes
+from hard_inventory_prepare import ensure_native_inventory
+from hard_inventory import check_inventory
 from hard_contracts import validate_instance_contract
 from hard_export import NativeMeasurementUnavailable, export_case, public_roles, sha_file, write_audit_timeline, write_json
 from hard_scenarios import HardConstructionError, cases
@@ -27,6 +29,7 @@ from runtime import ControllerSession
 HERE = Path(__file__).resolve().parent
 COMMIT = "f0825767cd50d69f666c7f282e54abfe58f1e917"
 BUILD = f"thor-CloudRendering-{COMMIT}"
+FROZEN_CASES = {"H04-2", "H04-3"}
 
 
 def controller_launch_options(platform, build_cache, executable=None):
@@ -65,7 +68,7 @@ def plan(selected):
         "checks": ["native inventory and capabilities before history", "spare placement slots",
                    "all history heat-source prerequisites", "one final target event",
                    "live AABB and fixed-camera mask preflight", "pixel-exact RLE with step mappings"],
-        "limits": "No object spawning; failures stay failures. Twenty designs do not imply twenty valid constructions.",
+        "limits": "Missing H01/H02 objects may be created by a native, recorded private setup action. Actual distinct IDs/capabilities must pass again in each world. Failures stay failures; twenty designs do not imply twenty valid constructions.",
     }
 
 
@@ -96,9 +99,24 @@ def _identity_history(ctx):
     write_json(ctx.out / "initial_identity_regions.json", anchors)
 
 
+def _camera_preflight(ctx, trace):
+    """Configure debug cameras only when requested; agent-only is explicit, not screened."""
+    if getattr(ctx, "debug_views", False):
+        report = configure_evidence_cameras(ctx, trace, ctx.out / "camera_preflight")
+        ctx.require(report.get("status") == "screened", f"Camera preflight rejected: {report.get('error')}")
+        return report
+    report = {"status": "not_requested", "camera_kind": "none_agent_first_person_only",
+              "camera_actions": [], "selected_views": [], "semantic_readability": "not_assessed",
+              "note": "Fixed-camera checks were not run. Identity evidence comes only from the real agent first-person tour."}
+    write_json(ctx.out / "camera_preflight" / "report.json", report)
+    return report
+
+
 def _preflight(ctx, trace):
-    trace.set_phase("真实实例与固定相机预检", public=False, kind="calibration")
-    trace.mark("真实实例与固定相机预检开始", kind="calibration_begin")
+    preflight_label = ("真实实例与调试相机预检" if getattr(ctx, "debug_views", False)
+                       else "真实实例与第一视角配置")
+    trace.set_phase(preflight_label, public=False, kind="calibration")
+    trace.mark(preflight_label + "开始", kind="calibration_begin")
     trace.set_role_ids(ctx.roles)
     # Let native setup settle before testing whether observation itself changes
     # the world. This preserves the strict camera guard rather than deleting
@@ -124,8 +142,7 @@ def _preflight(ctx, trace):
                                                     "z": agent["z"]},
                                      "note": "proposed held region; not a measured endpoint"}]
                                  for a in public_roles(ctx) if ctx.obj(a).get("pickupable") is True}
-    report = configure_evidence_cameras(ctx, trace, ctx.out / "camera_preflight")
-    ctx.require(report.get("status") == "screened", f"Camera preflight rejected: {report.get('error')}")
+    _camera_preflight(ctx, trace)
     ctx.initial_identity_regions = []  # Grounded later in the public agent-only tour.
     if ctx.group_id == "H03":
         mapping = []
@@ -139,13 +156,14 @@ def _preflight(ctx, trace):
     if ctx.group_id == "H05":
         ctx.require(ctx.obj("Z").get("isCooked") is False, "Initial potato must really be uncooked")
         ctx.public_declarations.append("公开历史起点：土豆Z未熟，温度为室温；后续熟度依据历史恢复。")
-    trace.mark("真实实例与固定相机预检完成", kind="calibration_end")
+    trace.mark(preflight_label + "完成", kind="calibration_end")
 
 
 def _public_capture_errors(trace):
     return [r for r in trace.events if r.get("phase_public") and
             (not r.get("new_event_received") or r.get("frame_status") != "captured"
-             or r.get("action") in {"Teleport", "TeleportFull", "PlaceObjectAtPoint"})]
+             or r.get("action") in {"Teleport", "TeleportFull", "PlaceObjectAtPoint",
+                                    "CreateObject", "CreateObjectAtLocation", "InitialRandomSpawn"})]
 
 
 def target_capture_diagnostics(ctx, trace):
@@ -199,7 +217,10 @@ def _quarantine_partial_exports(root, case_id, directory):
                 source.rename(target)
 
 
-def generate(selected, out, config, *, build_cache, executable=None, seed=17, scene_limit=30):
+def generate(selected, out, config, *, build_cache, executable=None, seed=17, scene_limit=30, debug_views=False):
+    frozen = sorted({c.case_id for c in selected} & FROZEN_CASES)
+    if frozen:
+        raise ValueError("Refusing to regenerate frozen, human-accepted cases: " + ", ".join(frozen))
     out = Path(out).resolve()
     try:
         out.relative_to(HERE.parent)
@@ -223,11 +244,15 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17, sc
                 "python": sys.version,
                 "versions": {n: importlib.metadata.version(n) for n in ("ai2thor", "numpy", "Pillow")},
                 "source_sha256": {str(p.relative_to(HERE)): sha_file(p) for p in sources if p.is_file()},
-                "plan": plan(selected), "review_status": "pending_human_review"}
+                "plan": plan(selected), "review_status": "pending_human_review",
+                "view_mode": "agent_plus_private_debug_fixed_views" if debug_views else "agent_first_person_only",
+                "debug_views_enabled": bool(debug_views),
+                "view_mode_note": ("Private fixed/overview/detail cameras are diagnostic only; they do not alter public first-person exports or physical labels."
+                                   if debug_views else "No fixed cameras are configured; identity evidence is from the actual agent first-person tour only.")}
     write_json(out / "run_manifest.json", manifest)
     platform = config.get("platform", "CloudRendering")
     launch = controller_launch_options(platform, build_cache, executable)
-    survey = survey_scenes(selected, out, config, launch, scene_limit=scene_limit)
+    survey = survey_scenes(selected, out, config, launch, scene_limit=scene_limit, seed=seed)
     rows = []
     for case in selected:
         directory = out / "audit_traces" / case.case_id
@@ -239,7 +264,7 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17, sc
         try:
             if scene is None:
                 raise HardConstructionError(f"No surveyed native scene satisfied {case.group_id} inventory; "
-                                            "see inventory_survey.json. No duplicate object was fabricated.")
+                                            "see inventory_survey.json, including any native addition attempts.")
             session = ControllerSession(scene=scene, platform=platform,
                         width=config.get("width", 640), height=config.get("height", 480),
                         controller_kwargs={"snapToGrid": False},
@@ -253,7 +278,11 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17, sc
                 if ctx.history_started and public and trace.events:
                     checkpoints = getattr(ctx, "view_checkpoints", [])
                     checkpoints.append({"next_phase": label, "previous_phase": prior,
-                                        "view_audit": audit_fixed_views(ctx, trace, prior)})
+                                        "view_audit": (audit_fixed_views(ctx, trace, prior)
+                                                       if getattr(ctx, "debug_views", False)
+                                                       else {"status": "not_requested", "camera_kind": "none_agent_first_person_only",
+                                                             "native_actions_sent": 0, "views": [],
+                                                             "note": "No fixed-camera audit was requested; first-person evidence remains in the trace."})})
                     ctx.view_checkpoints = checkpoints
                     write_json(directory / "view_checkpoints.json", checkpoints)
                 trace.mark(prior + " 结束", kind="phase_end")
@@ -263,7 +292,19 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17, sc
                               on_start_history=lambda context: _preflight(context, trace),
                               on_identity_history=_identity_history)
             ctx.case_id, ctx.group_id, ctx.family = case.case_id, case.group_id, case.family
+            ctx.debug_views = bool(debug_views)
             ctx.trace = trace
+            if case.group_id in {"H01", "H02"}:
+                ctx.mark_setup_stage("原生补充独立物品并核对属性", kind="setup")
+                prepared = ensure_native_inventory(session, [case.group_id], seed=seed,
+                                                   history_started=ctx.history_started)
+                write_json(directory / "native_inventory_preparation.json", prepared)
+                verified = check_inventory(case.group_id, session.snapshot())
+                ctx.check("native_inventory_preparation", verified["satisfied"],
+                          {"preparation": prepared, "inventory_check": verified})
+                ctx.require(prepared.get("status") in {"already_sufficient", "added_and_verified"}
+                            and verified["satisfied"],
+                            "Native inventory preparation did not verify distinct, capable objects in this case world")
             case.run(ctx)
             ctx.require(ctx.target_event.get("success") is True, "Target action was not confirmed successful")
             contracts = validate_instance_contract(ctx)
@@ -273,7 +314,10 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17, sc
             ctx.require(bool(contracts) and all(c["passed"] for c in contracts),
                         "This actual instance does not establish the declared local mechanism; retain its trace without publishing a rule/Gold contradiction")
             trace.mark("规定观察窗口结束", kind="observation_end")
-            diagnostics = audit_fixed_views(ctx, trace, ctx.executed_phases[-1]["label"])
+            diagnostics = (audit_fixed_views(ctx, trace, ctx.executed_phases[-1]["label"])
+                           if debug_views else {"status": "not_requested",
+                               "camera_kind": "none_agent_first_person_only",
+                               "agent_capture_diagnostics": target_capture_diagnostics(ctx, trace)})
             write_json(directory / "end_view_diagnostics.json", diagnostics)
             ctx.require(not _public_capture_errors(trace), "Public history has missing/stale camera frames")
             ctx.require(not session.observer_errors, "A full-trace observer failed; do not silently drop steps")
@@ -345,15 +389,19 @@ def main(argv=None):
     p.add_argument("--local-executable-path", type=Path)
     p.add_argument("--seed", type=int, default=17)
     p.add_argument("--scene-limit", type=int, default=30)
+    p.add_argument("--debug-views", action="store_true", help="Enable private fixed/overview/detail diagnostic cameras")
     p.add_argument("--platform", choices=("CloudRendering", "Linux64"), default=None)
     args = p.parse_args(argv)
     if not 1 <= args.scene_limit <= 30:
         p.error("--scene-limit must be between 1 and 30")
     available = cases()
-    ids = [c.case_id for c in available] if args.all else (args.cases or "H05-1").split(",")
+    ids = [c.case_id for c in available if c.case_id not in FROZEN_CASES] if args.all else (args.cases or "H05-1").split(",")
     if len(ids) != len(set(ids)) or set(ids) - {c.case_id for c in available}:
         p.error("Unknown/duplicate case; use H01-1 through H05-4")
     selected = [c for c in available if c.case_id in ids]
+    frozen = sorted(set(ids) & FROZEN_CASES)
+    if frozen and not args.plan_only:
+        p.error("Refusing to regenerate frozen, human-accepted cases: " + ", ".join(frozen))
     if args.plan_only:
         print(json.dumps(plan(selected), ensure_ascii=False, indent=2))
         return 0
@@ -372,7 +420,8 @@ def main(argv=None):
     if args.platform:
         config["platform"] = args.platform
     result = generate(selected, args.out, config, build_cache=args.build_cache_dir,
-                      executable=executable, seed=args.seed, scene_limit=args.scene_limit)
+                      executable=executable, seed=args.seed, scene_limit=args.scene_limit,
+                      debug_views=args.debug_views)
     for row in result:
         if not row["published_inputs"]:
             print(f"[hard_generate] {row['case_id']} {row['status']}: {row.get('error', 'no published input')}",

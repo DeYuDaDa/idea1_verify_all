@@ -1,4 +1,5 @@
 import json
+import gzip
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,33 @@ from hard_scene_survey import scene_candidates, survey_scenes
 
 
 class HardSurveyTests(unittest.TestCase):
+    def test_native_addition_is_recorded_and_original_inventory_is_preserved(self):
+        class Controller:
+            def __init__(self, scene, **kwargs):
+                self.objects = [{"objectId": "Mug1", "objectType": "Mug", "canFillWithLiquid": True},
+                                {"objectId": "Machine", "objectType": "CoffeeMachine"}]
+            def snapshot(self):
+                return {"objects": list(self.objects)}
+            def stop(self):
+                pass
+        def prepare(session, groups, **kwargs):
+            session.objects.append({"objectId": "Mug2-native", "objectType": "Mug", "canFillWithLiquid": True})
+            return {"status": "added_and_verified", "action_receipts": [{"action": "CreateObjectAtLocation"}]}
+        with tempfile.TemporaryDirectory() as temp, \
+             patch("hard_scene_survey.ControllerSession", Controller), \
+             patch("hard_scene_survey.ensure_native_inventory", side_effect=prepare) as native:
+            root = Path(temp)
+            result = survey_scenes([SimpleNamespace(group_id="H01", scene="FloorPlan1")], root, {}, {}, scene_limit=1)
+            self.assertEqual(result["assignments"], {"H01": "FloorPlan1"})
+            self.assertEqual(native.call_count, 1)
+            row = result["scenes"][0]
+            with gzip.open(root / row["metadata_path"], "rt") as stream:
+                original = json.load(stream)
+            with gzip.open(root / row["prepared_metadata_path"], "rt") as stream:
+                prepared = json.load(stream)
+            self.assertEqual(sum(o["objectType"] == "Mug" for o in original["objects"]), 1)
+            self.assertEqual(sum(o["objectType"] == "Mug" for o in prepared["objects"]), 2)
+
     def test_scan_order_is_bounded_and_preserves_preferred_scene(self):
         case = SimpleNamespace(group_id="H01", scene="FloorPlan2")
         scenes = scene_candidates([case], 3)

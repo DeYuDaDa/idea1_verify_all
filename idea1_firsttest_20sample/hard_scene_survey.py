@@ -1,4 +1,4 @@
-"""Bounded native inventory survey; no asset spawning and no inferred counts."""
+"""Bounded native survey, with auditable H01/H02 additions before public history."""
 from __future__ import annotations
 
 import gzip
@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from hard_inventory import check_inventory
+from hard_inventory_prepare import ensure_native_inventory
 from runtime import ControllerSession
 
 
@@ -14,7 +15,7 @@ def scene_candidates(selected, limit=30):
     return list(dict.fromkeys(preferred + [f"FloorPlan{i}" for i in range(1, 31)]))[:limit]
 
 
-def survey_scenes(selected, root, config, launch, *, scene_limit=30):
+def survey_scenes(selected, root, config, launch, *, scene_limit=30, seed=17):
     root = Path(root)
     folder = root / "inventory_survey"
     folder.mkdir(parents=True, exist_ok=True)
@@ -38,10 +39,25 @@ def survey_scenes(selected, root, config, launch, *, scene_limit=30):
                 with gzip.open(root / relative, "wt", encoding="utf-8") as stream:
                     json.dump(metadata, stream, ensure_ascii=False)
                 row["metadata_path"] = relative
+                additions_needed = [group for group in groups if group in {"H01", "H02"}
+                                    and group not in report["assignments"]
+                                    and not check_inventory(group, metadata)["satisfied"]]
+                if additions_needed:
+                    row["native_inventory_preparation"] = {
+                        group: ensure_native_inventory(controller, [group], seed=seed, history_started=False)
+                        for group in additions_needed}
+                    metadata = controller.snapshot()
+                    augmented = f"inventory_survey/{scene}_after_native_additions.json.gz"
+                    with gzip.open(root / augmented, "wt", encoding="utf-8") as stream:
+                        json.dump(metadata, stream, ensure_ascii=False)
+                    row["prepared_metadata_path"] = augmented
                 for group in groups:
                     check = check_inventory(group, metadata)
                     row["checks"][group] = check
-                    if check["satisfied"] and group not in report["assignments"]:
+                    native_ready = (group not in additions_needed or
+                                    row["native_inventory_preparation"][group].get("status")
+                                    in {"already_sufficient", "added_and_verified"})
+                    if check["satisfied"] and native_ready and group not in report["assignments"]:
                         report["assignments"][group] = scene
                 row["status"] = "inventory_recorded"
                 print(f"[inventory] {scene}: assignments={report['assignments']}", flush=True)

@@ -1,0 +1,9 @@
+{
+  "schema": "hard-human-accepted/v1",
+  "accepted_on": "2026-10-28",
+  "case_ids": ["H04-2", "H04-3"],
+  "source_archive": "20261027T113014Z_hard_groups_20261027T113014Z_lw8DkX_43_hard_groups.zip",
+  "source_archive_sha256": "223db7db6e8fe04f5db48a8faf6ec99b62395d5b846ae8fcdc7daa7112891510",
+  "status": "human_visual_review_accepted_model_not_evaluated",
+  "policy": "Retain original V/S inputs, prepared requests, scoring metadata, media, native traces and source. Do not regenerate these case IDs. Human acceptance concerns the reviewed visual stories; preserving S does not imply a separate S review."
+}

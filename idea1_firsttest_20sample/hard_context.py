@@ -112,6 +112,61 @@ class HardContext:
         self.require(not self.history_started, "Setup placement is forbidden inside public history")
         return self.ops.place_initial(self.roles.get(child, child), self.roles.get(parent, parent))
 
+    def mark_setup_stage(self, label, *, kind="setup"):
+        """Label a private construction, feasibility-test, or calibration stage."""
+        self.require(not self.history_started, "Private setup stages cannot be added inside public history")
+        self.phase(str(label), public=False, kind=kind)
+        if self.trace:
+            if not self.on_phase:
+                self.trace.set_phase(str(label), public=False, kind=kind)
+            self.trace.mark(str(label) + " 开始", kind="setup_stage_begin")
+        return label
+
+    def restore_native_object(self, child, parent, *, settle_steps=4):
+        """Restore an object during private setup and label those native actions.
+
+        Scenario calibration code should use this API for endpoint restoration
+        rather than calling ``ops.place_initial`` directly. The phase remains
+        private, and both the attempt and its verification are marked in the
+        audit trace without adding synthetic simulator actions.
+        """
+        self.require(not self.history_started, "Native restoration is forbidden inside public history")
+        child_id = self.roles.get(child, child)
+        parent_id = self.roles.get(parent, parent)
+        prior_public = self.public_phase
+        prior = self.executed_phases[-1] if self.executed_phases else {
+            "label": "初始化与原生搭建", "public": False, "kind": "setup"}
+        label = f"私有原生恢复 {child} → {parent}"
+        self.phase(label, public=False, kind="setup")
+        if self.trace:
+            if not self.on_phase:
+                self.trace.set_phase(label, public=False, kind="setup")
+            self.trace.mark(label + " 开始", kind="restore_begin")
+        try:
+            result = self.ops.place_initial(child_id, parent_id)
+            if settle_steps:
+                self.ops.settle(steps=settle_steps)
+            child_obj, parent_obj = self.obj(child_id), self.obj(parent_id)
+            related = (parent_id in (child_obj.get("parentReceptacles") or [])
+                       and child_id in (parent_obj.get("receptacleObjectIds") or []))
+            self.require(related, f"Native restoration failed to verify {child} -> {parent}")
+            if self.trace:
+                self.trace.mark(label + " 成功", kind="restore_success")
+            return result
+        except Exception as exc:
+            if self.trace:
+                self.trace.mark(label + " 失败：" + type(exc).__name__, kind="restore_failure")
+            raise
+        finally:
+            self.phase(prior.get("label", "初始化与原生搭建"),
+                       public=bool(prior.get("public", False)),
+                       kind=prior.get("kind", "setup"))
+            if self.trace and not self.on_phase:
+                self.trace.set_phase(prior.get("label", "初始化与原生搭建"),
+                                     public=bool(prior.get("public", False)),
+                                     kind=prior.get("kind", "setup"))
+            self.public_phase = prior_public
+
     def capture(self, label, image=True):
         # Adapter used only by native nested setup. Reading the current event
         # adds no Unity action, including for legacy metadata-only checkpoints.

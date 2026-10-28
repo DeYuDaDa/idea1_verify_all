@@ -173,7 +173,7 @@ for($bi=0;$bi -lt $sources.Count;$bi++){
                     $auditFrames.Add($privateFrame)
                 }
                 $auditGroups=Export-CaptureGroups @(Value $timeline 'capture_groups' @()) $timelineRoot $timelinePath $assets $output
-                $auditTimeline=[ordered]@{title=[string](Value $timeline 'title' '');frames=$auditFrames.ToArray();capture_groups=$auditGroups.ToArray();boundaries=@(Value $timeline 'boundaries' @());steps=@(Value $timeline 'steps' @())}
+                $auditTimeline=[ordered]@{title=[string](Value $timeline 'title' '');frames=$auditFrames.ToArray();capture_groups=@($auditGroups);boundaries=@(Value $timeline 'boundaries' @());steps=@(Value $timeline 'steps' @())}
             }
             $items.Add([ordered]@{id="data/input/$($file.Name)";label=$sample;kind='dataset';model_input=$mi;frames=$frames.ToArray();media_quality=(RV-SummarizeMedia $frames.ToArray());references=$references.ToArray();request_origin=$origin;request_text=$request;request_run_status=$requestRunStatus;protocol=$protocol;audit_timeline=$auditTimeline})
         }

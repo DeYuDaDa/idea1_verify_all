@@ -233,7 +233,8 @@
       details.append(el('h3','同步视角 · 按同一时刻成组展示'));
       details.append(el('p','每张卡片对应同一全局步的同步采集。左右并列视角不是连续视频帧；只有 agent 视角属于 V 的模型输入，其余视角仅供人工审计。'));
       for(const [i,group] of timeline.capture_groups.entries()){
-        const section=el('section','','capture-group'),phase=group.phase_label?` · ${group.phase_label}`:'';
+        const section=el('section','','capture-group');
+        const phase=group.phase_label?` · ${group.phase_public?'公开历史/目标':'私有准备'}${group.phase_kind?`/${group.phase_kind}`:''} · ${group.phase_label}`:'';
         section.append(el('h4',`时刻组 ${group.capture_group_index??i} · 全局步 ${group.global_step??group.start_step??'?'}${phase}`));
         if(group.frame_status) section.append(el('p',`采集状态：${group.frame_status}${group.run_length?` · 稳定去重 ${group.run_length} 次、重复 ${group.duplicate_count??0} 次`:''}`));
         const views=el('div','','capture-views');
@@ -253,8 +254,20 @@
       const meta=[frame.start_step!=null||frame.end_step!=null?`步骤 ${frame.start_step??'?'}–${frame.end_step??'?'}`:'',frame.run_length!=null?`原有 ${frame.run_length} 张`:'',frame.duplicate_count!=null?`重复 ${frame.duplicate_count} 张`:''].filter(Boolean).join(' · ');
       figure.append(el('figcaption',meta?`${caption} · ${meta}`:caption));details.append(figure);
     }
-    if((timeline.boundaries||[]).length){details.append(el('h3','阶段与动作边界'));const list=el('ul');for(const b of timeline.boundaries)list.append(el('li',`步骤 ${b.step_index??'?'} · ${b.label||''}${b.kind?`（${b.kind}）`:''}`));details.append(list);}
-    if((timeline.steps||[]).length){details.append(el('h3','逐步动作记录'));const list=el('ol');for(const step of timeline.steps)list.append(el('li',typeof step==='string'?step:json(step)));details.append(list);}
+    if((timeline.boundaries||[]).length){details.append(el('h3','阶段与动作边界'));const list=el('ul');for(const b of timeline.boundaries)list.append(el('li',`步骤 ${b.step_index??b.global_step??'?'} · ${b.label||''}${b.kind?`（${b.kind}）`:''}`));details.append(list);}
+    if((timeline.steps||[]).length){
+      details.append(el('h3','逐步动作记录'));const list=el('ol');
+      for(const step of timeline.steps){
+        if(typeof step==='string'){list.append(el('li',step));continue;}
+        if(step&&typeof step==='object'&&('global_step'in step||'action'in step||'capture_label'in step)){
+          const phase=step.phase_label?`${step.phase_public?'公开':'私有'} · ${step.phase_label} · `:'';
+          const action=step.action?`${step.action}${Object.keys(step.action_kwargs||{}).length?` ${json(step.action_kwargs)}`:''}`:'';
+          const outcome=step.lastActionSuccess===false?' · 原生动作失败':step.native_exception?' · 原生异常':step.frame_status&&step.frame_status!=='captured'?` · 采集状态 ${step.frame_status}`:'';
+          list.append(el('li',`步骤 ${step.global_step??'?'} · ${phase}${step.capture_label||action||'检查点'}${step.capture_label&&action?` · ${action}`:''}${outcome}`));
+        } else list.append(el('li',json(step)));
+      }
+      details.append(list);
+    }
     target.append(details);
   }
   function move(delta) { const list=filtered(); if(!list.length)return;const index=list.indexOf(selected), next=index+delta; if(next>=0&&next<list.length) {choose(list[next]);window.scrollTo({top:0,behavior:'instant'});} }
