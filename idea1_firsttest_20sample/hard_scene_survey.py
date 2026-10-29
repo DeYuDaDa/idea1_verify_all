@@ -15,6 +15,22 @@ def scene_candidates(selected, limit=30):
     return list(dict.fromkeys(preferred + [f"FloorPlan{i}" for i in range(1, 31)]))[:limit]
 
 
+def check_layout_inventory(group, metadata):
+    """Check independent surfaces used by the existing native placement story.
+
+    Four coordinates on one CounterTop are not four PutObject destinations.
+    This gate establishes only inventory availability, not reachability.
+    """
+    minimum = {"H01": 2, "H02": 4}.get(group, 0)
+    ids = sorted({o["objectId"] for o in metadata.get("objects", [])
+                  if o.get("objectType") in {"CounterTop", "DiningTable", "KitchenIsland"}
+                  and o.get("receptacle") is True and o.get("objectId")
+                  and isinstance(o.get("position"), dict)})
+    return {"satisfied": len(ids) >= minimum, "required_distinct_surfaces": minimum,
+            "available_distinct_surfaces": len(ids), "surface_ids": ids,
+            "scope": "layout inventory only; placement and navigation remain unverified"}
+
+
 def survey_scenes(selected, root, config, launch, *, scene_limit=30, seed=17):
     root = Path(root)
     folder = root / "inventory_survey"
@@ -26,7 +42,7 @@ def survey_scenes(selected, root, config, launch, *, scene_limit=30, seed=17):
     controller = None
     try:
         for scene in scene_candidates(selected, scene_limit):
-            row = {"scene": scene, "checks": {}}
+            row = {"scene": scene, "checks": {}, "layout_checks": {}}
             report["scenes"].append(row)
             try:
                 if controller is None:
@@ -41,6 +57,7 @@ def survey_scenes(selected, root, config, launch, *, scene_limit=30, seed=17):
                 row["metadata_path"] = relative
                 additions_needed = [group for group in groups if group in {"H01", "H02"}
                                     and group not in report["assignments"]
+                                    and check_layout_inventory(group, metadata)["satisfied"]
                                     and not check_inventory(group, metadata)["satisfied"]]
                 if additions_needed:
                     row["native_inventory_preparation"] = {
@@ -54,10 +71,12 @@ def survey_scenes(selected, root, config, launch, *, scene_limit=30, seed=17):
                 for group in groups:
                     check = check_inventory(group, metadata)
                     row["checks"][group] = check
+                    layout = check_layout_inventory(group, metadata)
+                    row["layout_checks"][group] = layout
                     native_ready = (group not in additions_needed or
                                     row["native_inventory_preparation"][group].get("status")
                                     in {"already_sufficient", "added_and_verified"})
-                    if check["satisfied"] and native_ready and group not in report["assignments"]:
+                    if check["satisfied"] and layout["satisfied"] and native_ready and group not in report["assignments"]:
                         report["assignments"][group] = scene
                 row["status"] = "inventory_recorded"
                 print(f"[inventory] {scene}: assignments={report['assignments']}", flush=True)

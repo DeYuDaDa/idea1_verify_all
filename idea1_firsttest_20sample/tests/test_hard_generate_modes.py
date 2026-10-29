@@ -11,6 +11,19 @@ from hard_scenarios import cases
 
 
 class HardGenerateModesTests(unittest.TestCase):
+    def test_debug_sampling_does_not_hide_real_public_capture_failures(self):
+        trace = SimpleNamespace(events=[
+            {"phase_public": True, "new_event_received": True,
+             "frame_status": "debug_unsampled", "action": "MoveAhead"},
+            {"phase_public": True, "new_event_received": True,
+             "frame_status": "agent_rgb_missing", "action": "PutObject"},
+            {"phase_public": True, "new_event_received": False,
+             "frame_status": "debug_unsampled", "action": "MoveAhead"},
+            {"phase_public": True, "new_event_received": True,
+             "frame_status": "captured", "action": "PlaceObjectAtPoint"},
+        ])
+        self.assertEqual(hard_generate._public_capture_errors(trace), trace.events[1:])
+
     def test_frozen_ids_match_human_acceptance_record(self):
         import json
         policy = json.loads((Path(hard_generate.__file__).parent / "hard_accepted_cases.json").read_text(encoding="utf-8"))

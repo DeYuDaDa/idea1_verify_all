@@ -58,6 +58,115 @@ def make_session(event=None):
 
 
 class FullStepTraceTests(unittest.TestCase):
+    def test_debug_mode_samples_ordinary_steps_and_keeps_pre_and_post_critical_frames(self):
+        session = make_session()
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = FullStepTrace(session, temporary, capture_mode="debug", debug_stride=3)
+            trace.set_phase("public history", public=True)
+            for value in range(6):
+                session.controller.next_event = make_event(value)
+                session.step("Pass")
+            # The ordinary step immediately before a critical action is kept as
+            # its pre-action frame, even though it falls between stride samples.
+            session.controller.next_event = make_event(6)
+            session.step("Pass")
+            session.controller.next_event = make_event(7)
+            session.step("PickupObject", objectId="Mug|1")
+            index = trace.finish()
+            rows = trace.events
+            self.assertEqual(len(rows), 8)
+            self.assertTrue(all(row["metadata_gzip"] for row in rows))
+            self.assertEqual([row["global_step"] for row in rows], list(range(8)))
+            groups = index["capture_groups"]
+            captured = [group["global_step"] for group in groups if group["frame_status"] == "captured"]
+            self.assertEqual(captured, [0, 3, 6, 7])
+            self.assertEqual(rows[1]["frame_status"], "debug_unsampled")
+            self.assertEqual(rows[2]["frame_status"], "debug_unsampled")
+            self.assertEqual(rows[6]["debug_capture_reason"], "pre_critical_action")
+            self.assertEqual(rows[7]["debug_capture_reason"], "post_critical_action")
+            self.assertEqual(index["capture_policy"]["mode"], "debug")
+            self.assertEqual(index["capture_policy"]["debug_stride"], 3)
+
+    def test_debug_static_ordinary_frames_extend_one_exact_pixel_run(self):
+        session = make_session()
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = FullStepTrace(session, temporary, capture_mode="debug", debug_stride=3)
+            trace.set_phase("public", public=True)
+            for _ in range(5):
+                session.controller.next_event = make_event(0)
+                session.step("Pass")
+            index = trace.finish()
+            agent_runs = [run for run in trace.auditor_frames if run["view_id"] == "agent"]
+            self.assertEqual([run["start_step"] for run in agent_runs], [0])
+            self.assertEqual([run["run_length"] for run in agent_runs], [5])
+            self.assertEqual([run["duplicate_count"] for run in agent_runs], [4])
+            self.assertEqual([g["global_step"] for g in index["capture_groups"]], [0])
+            self.assertEqual(index["capture_groups"][0]["run_length"], 5)
+            self.assertEqual(index["capture_policy"]["debug_unsampled_global_steps"], [])
+            self.assertEqual(index["capture_policy"]["debug_verified_duplicate_global_steps"], [1, 2])
+
+    def test_debug_changed_unsampled_frames_do_not_extend_or_duplicate_across_gap(self):
+        session = make_session()
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = FullStepTrace(session, temporary, capture_mode="debug", debug_stride=3)
+            trace.set_phase("public", public=True)
+            for value in (0, 1, 2, 3, 3):
+                session.controller.next_event = make_event(value)
+                session.step("Pass")
+            index = trace.finish()
+            agent_runs = [run for run in trace.auditor_frames if run["view_id"] == "agent"]
+            self.assertEqual([run["start_step"] for run in agent_runs], [0, 3])
+            self.assertEqual([run["duplicate_count"] for run in agent_runs], [0, 1])
+            self.assertEqual(index["capture_policy"]["debug_unsampled_global_steps"], [1, 2])
+            self.assertEqual(index["capture_policy"]["debug_verified_duplicate_global_steps"], [])
+
+    def test_debug_mode_keeps_views_synchronized_and_flushes_last_frame_at_phase_boundary(self):
+        initial = make_event(0, [np.full((2, 3, 3), 9, dtype=np.uint8)])
+        initial.metadata["thirdPartyCameras"] = [{"thirdPartyCameraId": 0}]
+        session = make_session(initial)
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = FullStepTrace(session, temporary, capture_mode="debug", debug_stride=3)
+            trace.set_cameras([{"camera_id": 0, "view_id": "overview", "purpose": "context"}])
+            trace.set_phase("public history", public=True)
+            for agent, overview in ((0, 9), (1, 8)):
+                event = make_event(agent, [np.full((2, 3, 3), overview, dtype=np.uint8)])
+                event.metadata["thirdPartyCameras"] = [{"thirdPartyCameraId": 0}]
+                session.controller.next_event = event
+                session.step("Pass")
+            trace.set_phase("target", public=True, kind="target")
+            index = trace.finish()
+            self.assertEqual([g["global_step"] for g in index["capture_groups"]], [0, 1])
+            for group in index["capture_groups"]:
+                self.assertEqual([view["view_id"] for view in group["views"]], ["agent", "overview"])
+            self.assertEqual(index["capture_policy"]["debug_sampled_global_steps"], [0, 1])
+
+    def test_debug_mode_keeps_first_real_frame_after_phase_mark_and_reset_boundaries(self):
+        session = make_session()
+        with tempfile.TemporaryDirectory() as temporary:
+            trace = FullStepTrace(session, temporary, capture_mode="debug", debug_stride=3)
+            trace.set_phase("phase one", public=True)
+            for value in (0, 1):
+                session.controller.next_event = make_event(value)
+                session.step("Pass")
+            trace.set_phase("phase two", public=True)
+            session.controller.next_event = make_event(2)
+            session.step("Pass")
+            trace.mark("checkpoint")
+            session.controller.next_event = make_event(3)
+            session.step("Pass")
+            session.controller.next_event = make_event(4)
+            session.reset("MockScene")
+            session.controller.next_event = make_event(5)
+            session.step("Pass")
+            index = trace.finish()
+            by_step = {group["global_step"]: group for group in index["capture_groups"]}
+            self.assertTrue({0, 1, 2, 3, 4, 5}.issubset(by_step))
+            for step in (2, 3, 5):
+                self.assertEqual(by_step[step]["views"][0]["pixel_sha256"],
+                                 trace.events[step]["frames"][0]["pixel_sha256"])
+            for step in (2, 3, 5):
+                self.assertIn("first_frame_after_boundary", trace.events[step]["debug_capture_reasons"])
+
     def test_native_failure_is_recorded_and_stale_event_is_not_a_new_frame(self):
         session = make_session()
         with tempfile.TemporaryDirectory() as temporary:

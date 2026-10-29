@@ -16,12 +16,13 @@ args=("$@")
 while (($#)); do
   case "$1" in
     --all) shift ;;
-    --cases|--seed|--scene-limit) (($# >= 2)) || die "$1 needs a value"; shift 2 ;;
+    --cases|--seed|--scene-limit|--capture-mode|--debug-stride) (($# >= 2)) || die "$1 needs a value"; shift 2 ;;
     --debug-views) shift ;;
-    *) die "Supported options: --all (excludes frozen H04-2/3), --cases H03-1,H04-1,H04-4,H05-1, --seed INTEGER, --scene-limit 1..30, --debug-views. Default: H05-1 only." ;;
+    *) die "Supported options: --all (excludes frozen H04-2/3), --cases H03-1,H04-1,H04-4,H05-1, --seed INTEGER, --scene-limit 1..30, --capture-mode debug|full, --debug-stride INTEGER, --debug-views. Default: H05-1 only; debug capture." ;;
   esac
 done
 printf '\n[43] Checking source and mock contracts before starting Unity. No model environment is used.\n'
+printf '[43] Capture defaults to debug (key frames + ordinary stride 3). Use --capture-mode full for the final dense visual dataset.\n'
 run_python -m compileall -q runtime.py full_step_trace.py hard_context.py hard_navigation.py hard_inventory.py hard_inventory_prepare.py hard_scene_survey.py hard_contracts.py hard_scenarios.py hard_camera.py hard_export.py hard_generate.py
 for pattern in 'test_hard_*.py' 'test_full_step_trace.py' 'test_interactions.py' 'test_camera.py' 'test_nested_setup.py' 'test_offline_runner.py'; do
   run_python -m unittest discover -s tests -p "$pattern" -v || die "Preflight tests failed; Unity has not started. Return this log."
@@ -59,7 +60,8 @@ source_names = ["runtime.py", "full_step_trace.py", "hard_context.py", "hard_nav
                 "docs/ai2thor_object_reference.md", "linux_server_operation/43_generate_hard_groups.sh",
                 "困难组逐题流程与全程采集核对_20261027.md", "linux_server_operation/44_困难组生成与网页审核.md",
                 "linux_server_operation/45_repair_hard_capture.sh", "linux_server_operation/46_审核意见修复与重跑.md",
-                "hard_accepted_cases.json", "linux_server_operation/49_已通过题封存与剩余组重跑.md"]
+                "hard_accepted_cases.json", "linux_server_operation/49_已通过题封存与剩余组重跑.md",
+                "linux_server_operation/52_杯盘与微波炉审核修复及调试采帧_20261028.md"]
 entries += [(project / name, "source/" + name) for name in source_names if (project / name).is_file()]
 manifest = [{"path": name, "bytes": p.stat().st_size, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
             for p, name in entries]

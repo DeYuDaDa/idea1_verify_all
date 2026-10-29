@@ -213,19 +213,37 @@ def _native_setup_place(ctx: Any, role: str, slot: str):
 
 def _calibrate_forward(ctx: Any, role: str, origin: str, destination: str,
                        *, restore_to: str | None = None):
-    """Exercise a required native placement, then restore with setup placement."""
+    """Exercise a native placement, then truly move the object back privately."""
     marker = getattr(ctx, "mark_setup_stage", None)
     if callable(marker):
         marker(f"私有原生可行性校准 {role}: {origin} -> {destination}", kind="calibration")
     if not _relation(ctx, role, origin):
         raise HardConstructionError(f"Cannot calibrate {role}: expected native origin {origin} is absent")
+    before = ctx.session.snapshot()
     _move(ctx, role, destination)
     if not _relation(ctx, role, destination):
         raise HardConstructionError(f"Calibration placement {role} -> {destination} was not verified")
+    placed = ctx.session.snapshot()
     restore_to = restore_to or origin
-    _native_setup_place(ctx, role, restore_to)
-    if not _relation(ctx, role, restore_to):
+    # parentReceptacles may list every ancestor.  A countertop in that list
+    # does not mean the object has been taken out of a nested appliance.
+    # Restore through native PickupObject/PutObject so the calibration leaves
+    # the machine slot empty before the next role is tested.
+    _move(ctx, role, restore_to)
+    restored = ctx.session.snapshot()
+    restored_to_ok = _relation(ctx, role, restore_to)
+    destination_cleared = not _relation(ctx, role, destination)
+    ctx.check(f"calibration_restore_{role}_{restore_to}", restored_to_ok and destination_cleared, {
+        "role": role, "origin": origin, "destination": destination,
+        "restore_to": restore_to, "before": before,
+        "after_forward_placement": placed, "after_restore": restored,
+        "restored_to_verified": restored_to_ok,
+        "old_destination_cleared": destination_cleared,
+    })
+    if not restored_to_ok:
         raise HardConstructionError(f"Setup restoration failed to restore {role} -> {restore_to}")
+    if not destination_cleared:
+        raise HardConstructionError(f"Calibration restoration left {role} related to old destination {destination}")
 
 
 def _native_toggle(ctx: Any, role: str, on: bool):
@@ -233,7 +251,17 @@ def _native_toggle(ctx: Any, role: str, on: bool):
 
 
 def _native_transfer(ctx: Any, role: str, destination: str):
-    return _move(ctx, role, destination)
+    result = _move(ctx, role, destination)
+    # A countertop PutObject may place the Potato beyond the current image's
+    # edge. Show the actual placed object through native navigation before
+    # leaving this public phase; do not synthesize a convenient replacement.
+    navigate = getattr(ctx, "navigate_to", None)
+    if getattr(ctx, "history_started", False) and callable(navigate):
+        navigate(ctx.roles[role], "after_put_show_actual_object")
+        trace = getattr(ctx, "trace", None)
+        if trace is not None:
+            trace.capture_current(f"放置后第一视角确认：{role}")
+    return result
 
 
 def _find_h03_mappings(ctx: Any) -> list[tuple[str, str]]:
@@ -870,9 +898,23 @@ def _h05(ctx: Any, variant: int):
         ctx.require(_temperature(ctx.obj("Z")) == "RoomTemp" and ctx.obj("Z").get("isCooked") is True,
                     "Potato did not naturally cool to RoomTemp while retaining cooked state")
     else:
-        _phase(ctx, "H05 uncooked history: microwave remains off, put in and remove")
+        _phase(ctx, "H05 uncooked history: place Potato inside while microwave stays off")
         ctx.ops.set_open(ctx.roles["Microwave"], True)
         _native_transfer(ctx, "Z", "Microwave")
+        _phase(ctx, "H05 uncooked history: close microwave; do not turn it on")
+        ctx.ops.set_open(ctx.roles["Microwave"], False)
+        ctx.require(ctx.obj("Microwave").get("isToggled") is False,
+                    "H05 uncooked history must keep the microwave off")
+        _phase(ctx, "H05 uncooked history: fixed four native Pass while closed")
+        for _ in range(4):
+            ctx.step("Pass")
+        ctx.require(ctx.obj("Microwave").get("isToggled") is False
+                    and ctx.obj("Z").get("isCooked") is False
+                    and _temperature(ctx.obj("Z")) == "RoomTemp"
+                    and _relation(ctx, "Z", "Microwave"),
+                    "H05 uncooked closed wait changed appliance power, Potato cooked state, temperature, or location")
+        _phase(ctx, "H05 uncooked history: reopen microwave and remove Potato")
+        ctx.ops.set_open(ctx.roles["Microwave"], True)
         _native_transfer(ctx, "Z", "cooling_C")
     final_inside = variant in (1, 2)
     _phase(ctx, "H05 place at final inside/outside position and close appliance")
@@ -907,7 +949,7 @@ def cases() -> list[HardCase]:
         result.append(HardCase(f"H01-{n}", "H01", "liquid_interleaving", "FloorPlan1",
                                f"双杯液体交错历史 {n}", lambda ctx, n=n: _h01(ctx, n)))
     for n in range(1, 5):
-        result.append(HardCase(f"H02-{n}", "H02", "support_and_position_swap", "FloorPlan2",
+        result.append(HardCase(f"H02-{n}", "H02", "support_and_position_swap", "FloorPlan6",
                                f"双盘换位与苹果承载 {n}", lambda ctx, n=n: _h02(ctx, n)))
     for n in range(1, 5):
         result.append(HardCase(f"H03-{n}", "H03", "burner_control_after_swap", "FloorPlan2",

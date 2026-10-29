@@ -5,7 +5,7 @@ import ast
 import unittest
 from pathlib import Path
 
-from hard_scenarios import cases, derive_answer, _sample_observation_window
+from hard_scenarios import cases, derive_answer, _sample_observation_window, _calibrate_forward
 
 
 def test_catalog_has_twenty_ordered_case_ids_and_group_contracts():
@@ -16,7 +16,87 @@ def test_catalog_has_twenty_ordered_case_ids_and_group_contracts():
                                              for variant in range(1, 5)]
     assert [row.group_id for row in rows[::4]] == [f"H{i:02d}" for i in range(1, 6)]
     assert all(row.scene and row.family and row.title and callable(row.run) for row in rows)
+    assert rows[4].scene == "FloorPlan6"
     assert rows[8].scene == "FloorPlan2"
+
+
+def test_calibration_native_move_removes_object_from_nested_machine_before_restoring_surface():
+    from copy import deepcopy
+    from unittest.mock import patch
+    import hard_scenarios
+
+    class _CalibrationContext:
+        roles = {"A": "Mug|A", "M": "CoffeeMachine|1"}
+        waypoints = {"A_park": {"objectId": "CounterTop|1"}}
+
+        def __init__(self):
+            self.objects = [
+                {"objectId": "Mug|A", "parentReceptacles": ["CounterTop|1"]},
+                {"objectId": "CoffeeMachine|1", "parentReceptacles": ["CounterTop|1"],
+                 "receptacleObjectIds": []},
+                {"objectId": "CounterTop|1", "receptacleObjectIds": ["CoffeeMachine|1"]},
+            ]
+            self.moves = []
+            self.checks = []
+            self.session = self
+
+        def snapshot(self):
+            return {"objects": deepcopy(self.objects)}
+
+        def obj(self, object_id):
+            return next(row for row in self.objects if row["objectId"] == object_id)
+
+        def mark_setup_stage(self, label, *, kind):
+            self.setup_stage = (label, kind)
+
+        def check(self, label, passed, evidence):
+            self.checks.append((label, passed, evidence))
+
+    ctx = _CalibrationContext()
+
+    def native_move(context, role, slot):
+        context.moves.append((role, slot))
+        mug = context.obj("Mug|A")
+        machine = context.obj("CoffeeMachine|1")
+        if slot == "M":
+            mug["parentReceptacles"] = ["CoffeeMachine|1", "CounterTop|1"]
+            machine["receptacleObjectIds"] = ["Mug|A"]
+        else:
+            mug["parentReceptacles"] = ["CounterTop|1"]
+            machine["receptacleObjectIds"] = []
+        return {"lastActionSuccess": True}
+
+    with patch.object(hard_scenarios, "_move", side_effect=native_move):
+        _calibrate_forward(ctx, "A", "A_park", "M")
+
+    assert ctx.moves == [("A", "M"), ("A", "A_park")]
+    assert "CoffeeMachine|1" not in ctx.obj("Mug|A")["parentReceptacles"]
+    assert "Mug|A" not in ctx.obj("CoffeeMachine|1")["receptacleObjectIds"]
+    assert ctx.checks[-1][0] == "calibration_restore_A_A_park"
+    assert ctx.checks[-1][1] is True
+    assert ctx.checks[-1][2]["old_destination_cleared"] is True
+    assert ctx.checks[-1][2]["before"]["objects"][0]["parentReceptacles"] == ["CounterTop|1"]
+    assert ctx.checks[-1][2]["after_forward_placement"]["objects"][0]["parentReceptacles"] == [
+        "CoffeeMachine|1", "CounterTop|1"]
+    assert ctx.checks[-1][2]["after_restore"]["objects"][0]["parentReceptacles"] == ["CounterTop|1"]
+
+
+def test_public_transfer_shows_the_same_placed_object_before_leaving_its_phase():
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    import hard_scenarios
+    for public in (False, True):
+        calls = []
+        ctx = SimpleNamespace(roles={"Z": "same-potato"}, history_started=public,
+                              navigate_to=lambda oid, why: calls.append(("show", oid)),
+                              trace=SimpleNamespace(capture_current=lambda label: calls.append(("capture", label))))
+        with patch.object(hard_scenarios, "_move", side_effect=lambda *args: calls.append(("move", args[2]))):
+            hard_scenarios._native_transfer(ctx, "Z", "final_E")
+        assert calls[0] == ("move", "final_E")
+        if public:
+            assert calls[1] == ("show", "same-potato") and calls[2][0] == "capture"
+        else:
+            assert len(calls) == 1
 
 
 class _Context:
@@ -128,6 +208,12 @@ def test_public_queries_do_not_embed_planned_gold_and_no_cooking_shortcut_is_use
     assert "_h05_cook_history_native" in source
     assert 'set_toggle(ctx.roles["Microwave"], True)' in source
     assert "native_move_" in source
+    uncooked = source[source.index('H05 uncooked history: place Potato inside'):source.index('final_inside = variant in (1, 2)')]
+    assert 'set_open(ctx.roles["Microwave"], False)' in uncooked
+    assert 'for _ in range(4):\n            ctx.step("Pass")' in uncooked
+    assert 'set_open(ctx.roles["Microwave"], True)' in uncooked
+    assert 'set_toggle(ctx.roles["Microwave"], True)' not in uncooked
+    assert 'isCooked") is False' in uncooked and '_temperature(ctx.obj("Z")) == "RoomTemp"' in uncooked
 
 
 def load_tests(loader, tests, pattern):

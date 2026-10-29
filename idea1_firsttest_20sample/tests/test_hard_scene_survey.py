@@ -6,7 +6,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from hard_scene_survey import scene_candidates, survey_scenes
+from hard_scene_survey import check_layout_inventory, scene_candidates, survey_scenes
+
+
+def surfaces(count):
+    return [{"objectId": f"CounterTop|{n}", "objectType": "CounterTop", "receptacle": True,
+             "position": {"x": n * 2., "y": 1., "z": 0.}} for n in range(count)]
 
 
 class HardSurveyTests(unittest.TestCase):
@@ -14,7 +19,7 @@ class HardSurveyTests(unittest.TestCase):
         class Controller:
             def __init__(self, scene, **kwargs):
                 self.objects = [{"objectId": "Mug1", "objectType": "Mug", "canFillWithLiquid": True},
-                                {"objectId": "Machine", "objectType": "CoffeeMachine"}]
+                                {"objectId": "Machine", "objectType": "CoffeeMachine"}] + surfaces(2)
             def snapshot(self):
                 return {"objects": list(self.objects)}
             def stop(self):
@@ -52,7 +57,7 @@ class HardSurveyTests(unittest.TestCase):
                 count = 1 if self.scene == "FloorPlan1" else 2
                 return {"objects": [{"objectId": f"Mug{i}", "objectType": "Mug", "canFillWithLiquid": True}
                                     for i in range(count)] +
-                                   [{"objectId": "Machine", "objectType": "CoffeeMachine"}]}
+                                   [{"objectId": "Machine", "objectType": "CoffeeMachine"}] + surfaces(2)}
             def stop(self):
                 pass
         with tempfile.TemporaryDirectory() as temp, patch("hard_scene_survey.ControllerSession", Controller):
@@ -62,6 +67,27 @@ class HardSurveyTests(unittest.TestCase):
             self.assertFalse(result["scenes"][0]["checks"]["H01"]["satisfied"])
             self.assertTrue((Path(temp) / "inventory_survey/FloorPlan1.json.gz").exists())
             self.assertEqual(json.loads((Path(temp) / "inventory_survey.json").read_text())["unassigned_groups"], [])
+
+    def test_h02_survey_does_not_assign_inventory_ready_room_with_only_three_surfaces(self):
+        class Controller:
+            def __init__(self, scene, **kwargs):
+                self.scene = scene
+            def reset(self, scene):
+                self.scene = scene
+            def snapshot(self):
+                return {"objects": surfaces(3 if self.scene == "FloorPlan1" else 4) + [
+                    {"objectId": "P", "objectType": "Plate", "pickupable": True, "receptacle": True},
+                    {"objectId": "Q", "objectType": "Plate", "pickupable": True, "receptacle": True},
+                    {"objectId": "X", "objectType": "Apple", "pickupable": True}]}
+            def stop(self):
+                pass
+        with tempfile.TemporaryDirectory() as temp, patch("hard_scene_survey.ControllerSession", Controller):
+            result = survey_scenes([SimpleNamespace(group_id="H02", scene="FloorPlan1")],
+                                   temp, {}, {}, scene_limit=2)
+        self.assertEqual(result["assignments"], {"H02": "FloorPlan2"})
+        self.assertTrue(result["scenes"][0]["checks"]["H02"]["satisfied"])
+        self.assertFalse(result["scenes"][0]["layout_checks"]["H02"]["satisfied"])
+        self.assertTrue(check_layout_inventory("H02", {"objects": surfaces(4)})["satisfied"])
 
 
 if __name__ == "__main__":

@@ -29,8 +29,15 @@ def _jsonable(value: Any) -> Any:
 class FullStepTrace:
     """Observe every session step, saving full metadata and compact frame indexes."""
 
-    def __init__(self, session: Any, directory: str | Path) -> None:
+    def __init__(self, session: Any, directory: str | Path, capture_mode: str = "full",
+                 debug_stride: int = 3) -> None:
+        if capture_mode not in {"full", "debug"}:
+            raise ValueError("capture_mode must be 'full' or 'debug'")
+        if not isinstance(debug_stride, int) or isinstance(debug_stride, bool) or debug_stride < 1:
+            raise ValueError("debug_stride must be a positive integer")
         self.session = session
+        self.capture_mode = capture_mode
+        self.debug_stride = debug_stride
         self.directory = Path(directory)
         self.frames_dir = self.directory / "frames"
         self.metadata_dir = self.directory / "metadata"
@@ -53,6 +60,13 @@ class FullStepTrace:
         self._cameras: list[dict[str, Any]] = []
         self._role_ids: dict[str, Any] = {}
         self._finished: dict[str, Any] | None = None
+        self._debug_pending: dict[str, Any] | None = None
+        self._debug_ordinary_index = 0
+        self._debug_last_role_signature: Any = None
+        self._debug_keep_next_boundary = False
+        self._debug_sampled_steps: list[int] = []
+        self._debug_unsampled_steps: list[int] = []
+        self._debug_verified_duplicate_steps: list[int] = []
         self.session.add_step_observer(self._observe)
 
     @property
@@ -63,7 +77,10 @@ class FullStepTrace:
         if not self.events_path.exists():
             return []
         with self.events_path.open("r", encoding="utf-8") as stream:
-            return [json.loads(line) for line in stream if line.strip()]
+            rows = [json.loads(line) for line in stream if line.strip()]
+        if self._debug_pending is not None:
+            rows.append(dict(self._debug_pending["entry"]))
+        return rows
 
     @property
     def runs(self) -> list[dict[str, Any]]:
@@ -77,11 +94,17 @@ class FullStepTrace:
     def set_phase(self, label: str, public: bool = False, kind: str = "history") -> None:
         if kind not in {"history", "target", "setup", "calibration", "observation", "other"}:
             raise ValueError(f"unsupported phase kind: {kind!r}")
+        if self.capture_mode == "debug":
+            self._flush_debug_pending(force_capture=True, reason="phase_boundary")
+            self._debug_keep_next_boundary = True
         self._phase_id += 1
         self._phase = {"label": str(label), "public": bool(public), "kind": kind}
         self._segment += 1
 
     def mark(self, label: str, kind: str = "boundary") -> dict[str, Any]:
+        if self.capture_mode == "debug":
+            self._flush_debug_pending(force_capture=True, reason="checkpoint_boundary")
+            self._debug_keep_next_boundary = True
         self._segment += 1
         boundary = {
             "label": str(label), "kind": str(kind), "global_step": self._global_step - 1,
@@ -205,7 +228,8 @@ class FullStepTrace:
                           "purpose": frame.get("purpose", "model_evidence" if view_id == "agent" else camera.get("purpose", "unspecified"))})
         signature = [(v.get("view_id"), v.get("status", "captured"), v.get("pixel_sha256")) for v in views]
         previous = self._last_capture_group
-        same_context = bool(previous and previous["reset_index"] == self._reset_index
+        has_real_pixels = all(v.get("pixel_sha256") for v in views)
+        same_context = bool(has_real_pixels and previous and previous["reset_index"] == self._reset_index
             and previous["phase_id"] == self._phase_id and previous["segment"] == self._segment
             and previous["end_step"] == step_number - 1)
         if same_context and previous.get("_signature") == signature:
@@ -234,6 +258,9 @@ class FullStepTrace:
 
     def _observe(self, result: StepResult) -> None:
         if self._finished is not None:
+            return
+        if self.capture_mode == "debug":
+            self._observe_debug(result)
             return
         if (result.record.get("record_kind") != "checkpoint"
                 and result.record.get("action") in {"Initialize", "Reset"} and self._has_seen_step):
@@ -305,6 +332,227 @@ class FullStepTrace:
         self._last_event = entry
         self._has_seen_step = True
 
+    @staticmethod
+    def _debug_action_is_ordinary(record: Mapping[str, Any]) -> bool:
+        action = str(record.get("action") or "").lower()
+        if action in {"pass", "moveahead", "moveback", "moveleft", "moveright",
+                      "rotateleft", "rotateright", "lookup", "lookdown"}:
+            return True
+        # Keep unrecognized/native state-changing actions. The caller can safely
+        # downsample only the explicitly understood continuous navigation set.
+        return False
+
+    def _role_signature(self, metadata: Mapping[str, Any]) -> Any:
+        """Small tracked-state signature; deliberately excludes ordinary pose drift."""
+        if not self._role_ids:
+            return None
+        objects = metadata.get("objects", [])
+        by_id = {str(row.get("objectId")): row for row in objects if isinstance(row, Mapping)}
+        fields = ("temperature", "isFilledWithLiquid", "fillLiquid", "isPickedUp", "parentReceptacles",
+                  "isOpen", "isToggled", "isDirty", "isCooked")
+        signature = {}
+        for role, raw_id in sorted(self._role_ids.items()):
+            object_id = str(raw_id)
+            row = by_id.get(object_id)
+            if row is not None:
+                signature[role] = {key: _jsonable(row.get(key)) for key in fields if key in row}
+        # Held-object membership is sometimes represented on the agent metadata.
+        held = metadata.get("inventoryObjects", [])
+        signature["__held_ids__"] = sorted(str(item.get("objectId")) for item in held if isinstance(item, Mapping))
+        return signature
+
+    def _debug_views(self, event: Any) -> list[dict[str, Any]]:
+        # Keep one immutable frame buffer even if a backend reuses its arrays
+        # when the next native event arrives.
+        agent = getattr(event, "frame", None)
+        views = [{"view_id": "agent", "array": agent.copy() if agent is not None else None,
+                  "view_role": "agent_first_person", "purpose": "model_evidence"}]
+        for camera in self._cameras:
+            array = self._get_camera_frame(event, camera["camera_id"])
+            views.append({"view_id": camera["view_id"], "camera_id": camera["camera_id"],
+                          "array": array.copy() if array is not None else None,
+                          "purpose": camera["purpose"]})
+        return views
+
+    def _debug_duplicate_frames(self, pending: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+        """Retain an unscheduled step only when its live pixels exactly repeat the prior group."""
+        previous = self._last_capture_group
+        step_number = pending["step_number"]
+        if (previous is None or previous["reset_index"] != self._reset_index
+                or previous["phase_id"] != self._phase_id or previous["segment"] != self._segment
+                or previous["end_step"] != step_number - 1):
+            return None
+        prior_views = previous.get("views", [])
+        current_views = pending["views"]
+        if not prior_views or len(prior_views) != len(current_views):
+            return None
+        hashed = []
+        for prior, current in zip(prior_views, current_views):
+            array = current.get("array")
+            if (array is None or prior.get("status", "captured") != "captured"
+                    or not prior.get("pixel_sha256") or prior.get("view_id") != current.get("view_id")):
+                return None
+            digest, width, height, mode, _ = self._image_info(array)
+            if (digest != prior["pixel_sha256"] or width != prior.get("width")
+                    or height != prior.get("height") or mode != prior.get("mode")):
+                return None
+            hashed.append({key: prior[key] for key in ("view_id", "path", "pixel_sha256", "width", "height", "mode")}
+                          | {key: current[key] for key in ("camera_id", "purpose") if key in current})
+        return hashed
+
+    def _flush_debug_pending(self, force_capture: bool = False, reason: str | None = None) -> None:
+        pending = self._debug_pending
+        if pending is None:
+            return
+        duplicate_frames = None
+        if not pending["selected"] and not force_capture and pending.get("ordinary_action"):
+            duplicate_frames = self._debug_duplicate_frames(pending)
+        verified_duplicate = duplicate_frames is not None
+        should_capture = bool(pending["selected"] or force_capture or verified_duplicate)
+        frames: list[dict[str, Any]] = []
+        status = pending.get("base_status") or ("captured" if should_capture else "debug_unsampled")
+        if should_capture:
+            if verified_duplicate:
+                frames = duplicate_frames
+            else:
+                for view in pending["views"]:
+                    array = view.get("array")
+                    if array is None:
+                        frames.append({"view_id": view["view_id"],
+                                       **({"camera_id": view["camera_id"]} if "camera_id" in view else {}),
+                                       "purpose": view.get("purpose"),
+                                       "status": "camera_frame_missing" if view["view_id"] != "agent" else "agent_rgb_missing"})
+                        continue
+                    frame = self._save_frame(array, view["view_id"])
+                    frame.update({k: view[k] for k in ("camera_id", "purpose") if k in view})
+                    frames.append(frame)
+            for frame in frames:
+                if frame.get("pixel_sha256"):
+                    self._append_run(frame, pending["step_number"])
+            reasons = list(pending["entry"].get("debug_capture_reasons", []))
+            original_reason = pending["entry"].get("debug_capture_reason")
+            if original_reason and original_reason not in reasons:
+                reasons.append(original_reason)
+            if reason:
+                pending["entry"]["debug_capture_reason"] = reason
+            elif verified_duplicate:
+                pending["entry"]["debug_capture_reason"] = "verified_identical_consecutive_frame"
+            latest_reason = pending["entry"].get("debug_capture_reason")
+            if latest_reason and latest_reason not in reasons:
+                reasons.append(latest_reason)
+            if reasons:
+                pending["entry"]["debug_capture_reasons"] = reasons
+            self._debug_sampled_steps.append(pending["step_number"])
+            if verified_duplicate:
+                self._debug_verified_duplicate_steps.append(pending["step_number"])
+        else:
+            frames = [{"view_id": view["view_id"], **({"camera_id": view["camera_id"]} if "camera_id" in view else {}),
+                       "purpose": view.get("purpose"), "status": "debug_unsampled"}
+                      for view in pending["views"]]
+            self._debug_unsampled_steps.append(pending["step_number"])
+        if status == "captured":
+            if any(frame.get("status") == "agent_rgb_missing" for frame in frames):
+                status = "agent_rgb_missing"
+            elif any(frame.get("status") == "camera_frame_missing" for frame in frames):
+                status = "camera_frame_missing"
+        # Unsampled steps belong in the complete step/metadata ledger and policy
+        # manifest, but not in capture_groups: downstream image reviewers treat
+        # groups without paths as missing media.
+        if should_capture:
+            self._append_capture_group(frames, pending["step_number"], status)
+        pending["entry"]["frames"] = frames
+        pending["entry"]["frame_status"] = status
+        self._event_file.write(json.dumps(pending["entry"], ensure_ascii=False, separators=(",", ":")) + "\n")
+        self._event_file.flush()
+        self._last_event = pending["entry"]
+        self._debug_pending = None
+
+    def _observe_debug(self, result: StepResult) -> None:
+        reset_boundary = False
+        if (result.record.get("record_kind") != "checkpoint"
+                and result.record.get("action") in {"Initialize", "Reset"} and self._has_seen_step):
+            reset_boundary = True
+            self._flush_debug_pending(force_capture=True, reason="reset_boundary")
+            self._reset_index += 1
+            self._segment += 1
+            self._last_run_by_key.clear()
+            self._phase_id += 1
+            self._phase = {"label": "reset", "public": False, "kind": "setup"}
+            self._debug_last_role_signature = None
+            self._debug_ordinary_index = 0
+        # A critical current action also makes the immediately preceding image
+        # the pre-action view, so resolve the one-frame buffer before recording it.
+        action = str(result.record.get("action") or "")
+        critical_names = {"pickupobject", "putobject", "fillobjectwithliquid", "emptyliquidfromobject",
+                          "openobject", "closeobject", "toggleobjecton", "toggleobjectoff",
+                          "placeobjectatpoint", "initialize", "reset"}
+        current_signature = self._role_signature(result.metadata)
+        role_changed = (self._debug_last_role_signature is not None
+                        and current_signature != self._debug_last_role_signature)
+        failed = result.record.get("lastActionSuccess") is False or bool(result.native_error)
+        ordinary_action = self._debug_action_is_ordinary(result.record)
+        current_critical = (action.lower() in critical_names or failed or role_changed
+                            or result.record.get("record_kind") == "checkpoint" or not ordinary_action)
+        self._flush_debug_pending(force_capture=current_critical,
+                                  reason="pre_critical_action" if current_critical else None)
+        step_number = self._global_step
+        self._global_step += 1
+        metadata_rel = self._write_metadata(step_number, result.metadata)
+        self._has_seen_step = True
+        if current_signature is not None:
+            self._debug_last_role_signature = current_signature
+        # Advance the ordinary-action cadence for every ordinary step, even if
+        # a boundary or state change independently forces its frame to be kept.
+        stride_selected = False
+        if ordinary_action:
+            stride_selected = (self._debug_ordinary_index % self.debug_stride) == 0
+            self._debug_ordinary_index += 1
+        has_real_agent_frame = (result.new_event_received and result.event is not None
+                                and getattr(result.event, "frame", None) is not None)
+        boundary_selected = self._debug_keep_next_boundary and has_real_agent_frame
+        if boundary_selected:
+            self._debug_keep_next_boundary = False
+        selected = current_critical or stride_selected or boundary_selected
+        # An exception's stale event is never represented as a newly sampled image.
+        if not result.new_event_received or result.event is None:
+            base_status = "stale_exception_event_not_new_picture" if not result.new_event_received else "event_missing"
+            views = [{"view_id": "agent", "purpose": "model_evidence", "array": None}]
+            views.extend({"view_id": c["view_id"], "camera_id": c["camera_id"],
+                          "purpose": c["purpose"], "array": None} for c in self._cameras)
+            selected = True
+        else:
+            base_status = None
+            views = self._debug_views(result.event)
+        entry = {
+            "global_step": step_number, "reset_index": self._reset_index,
+            "action_index": result.record.get("index"),
+            "record_kind": result.record.get("record_kind", "native"),
+            "action": result.record.get("action"), "action_kwargs": result.record.get("kwargs", {}),
+            "capture_label": result.record.get("capture_label"), "time_utc": result.record.get("time_utc"),
+            "wall_time": result.record.get("wall_time"), "phase_id": self._phase_id,
+            "phase_label": self._phase["label"], "phase_public": self._phase["public"],
+            "phase_kind": self._phase["kind"], "frames": [],
+            "frame_status": base_status or ("debug_sample_pending" if selected else "debug_unsampled_pending"),
+            "new_event_received": bool(result.new_event_received), "native_exception": result.native_error,
+            "lastActionSuccess": result.record.get("lastActionSuccess"),
+            "errorMessage": result.record.get("errorMessage", ""), "metadata_gzip": metadata_rel,
+        }
+        if boundary_selected:
+            entry["debug_capture_reason"] = "first_frame_after_boundary"
+        self._debug_pending = {"step_number": step_number, "selected": selected,
+                               "ordinary_action": ordinary_action, "views": views,
+                               "entry": entry, "base_status": base_status}
+        # Critical post-action frames, checkpoints, and failures are flushed now;
+        # ordinary frames wait one step so a following critical action can keep
+        # the exact pre-action picture too.
+        if current_critical or base_status is not None:
+            self._flush_debug_pending(force_capture=True,
+                                      reason=("first_frame_after_boundary" if boundary_selected else
+                                              "post_critical_action" if current_critical else None))
+        if reset_boundary:
+            # Preserve the first real post-reset view as well as the reset event.
+            self._debug_keep_next_boundary = True
+
     def _public_runs(self) -> list[dict[str, Any]]:
         output = []
         phase_order: dict[tuple[int, int], int] = {}
@@ -337,6 +585,8 @@ class FullStepTrace:
     def finish(self) -> dict[str, Any]:
         if self._finished is not None:
             return dict(self._finished)
+        if self.capture_mode == "debug":
+            self._flush_debug_pending(force_capture=True, reason="final_frame")
         self.session.remove_step_observer(self._observe)
         self._event_file.flush()
         self._event_file.close()
@@ -345,12 +595,28 @@ class FullStepTrace:
                                    encoding="utf-8")
         failures = [event for event in self.events
                     if event["native_exception"] or event["lastActionSuccess"] is False
-                    or event["frame_status"] != "captured"
+                    or event["frame_status"] not in {"captured", "debug_unsampled"}
                     or any(frame.get("status") == "camera_frame_missing"
                            for frame in event["frames"])]
         observer_errors = list(getattr(self.session, "observer_errors", []))
         index = {
             "schema_version": 2,
+            "capture_policy": {
+                "mode": self.capture_mode,
+                "debug_stride": self.debug_stride if self.capture_mode == "debug" else None,
+                "debug_ordinary_actions": ["Pass", "MoveAhead", "MoveBack", "MoveLeft", "MoveRight",
+                                           "RotateLeft", "RotateRight", "LookUp", "LookDown"],
+                "debug_sampling_order": "action/state selection first; candidate pixels are hashed before PNG content deduplication, and unscheduled ordinary frames are compared only with the immediately previous synchronized frame",
+                "debug_sampled_global_steps": list(self._debug_sampled_steps),
+                "debug_unsampled_global_steps": list(self._debug_unsampled_steps),
+                "debug_verified_duplicate_global_steps": list(self._debug_verified_duplicate_steps),
+                "debug_limitations": [
+                    "unsampled intervals contain no image evidence and cannot establish visual continuity",
+                    "the one-step buffer keeps a pre-critical frame only when it is the immediately preceding step",
+                    "pixel-identical RLE applies only to captured frames at consecutive global steps",
+                    "unscheduled ordinary steps are pixel-hashed against the immediately previous synchronized group; exact repeats extend its RLE run without writing a new PNG",
+                ] if self.capture_mode == "debug" else [],
+            },
             "steps_path": "steps.jsonl", "boundaries_path": "boundaries.json",
             "frame_directory": "frames", "metadata_directory": "metadata",
             "global_step_count": self._global_step, "reset_count": self._reset_index + 1,

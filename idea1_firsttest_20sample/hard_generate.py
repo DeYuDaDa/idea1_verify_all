@@ -161,7 +161,7 @@ def _preflight(ctx, trace):
 
 def _public_capture_errors(trace):
     return [r for r in trace.events if r.get("phase_public") and
-            (not r.get("new_event_received") or r.get("frame_status") != "captured"
+            (not r.get("new_event_received") or r.get("frame_status") not in {"captured", "debug_unsampled"}
              or r.get("action") in {"Teleport", "TeleportFull", "PlaceObjectAtPoint",
                                     "CreateObject", "CreateObjectAtLocation", "InitialRandomSpawn"})]
 
@@ -217,7 +217,8 @@ def _quarantine_partial_exports(root, case_id, directory):
                 source.rename(target)
 
 
-def generate(selected, out, config, *, build_cache, executable=None, seed=17, scene_limit=30, debug_views=False):
+def generate(selected, out, config, *, build_cache, executable=None, seed=17, scene_limit=30, debug_views=False,
+             capture_mode="debug", debug_stride=3):
     frozen = sorted({c.case_id for c in selected} & FROZEN_CASES)
     if frozen:
         raise ValueError("Refusing to regenerate frozen, human-accepted cases: " + ", ".join(frozen))
@@ -247,6 +248,9 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17, sc
                 "plan": plan(selected), "review_status": "pending_human_review",
                 "view_mode": "agent_plus_private_debug_fixed_views" if debug_views else "agent_first_person_only",
                 "debug_views_enabled": bool(debug_views),
+                "capture_mode": capture_mode, "debug_stride": debug_stride if capture_mode == "debug" else None,
+                "capture_note": ("Debug images retain key actions and boundaries, with ordinary steps sampled. Full native actions/metadata remain recorded; this is not the final dense visual dataset."
+                                 if capture_mode == "debug" else "All native step images are captured before exact adjacent-frame deduplication."),
                 "view_mode_note": ("Private fixed/overview/detail cameras are diagnostic only; they do not alter public first-person exports or physical labels."
                                    if debug_views else "No fixed cameras are configured; identity evidence is from the actual agent first-person tour only.")}
     write_json(out / "run_manifest.json", manifest)
@@ -269,7 +273,7 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17, sc
                         width=config.get("width", 640), height=config.get("height", 480),
                         controller_kwargs={"snapToGrid": False},
                         **launch)
-            trace = FullStepTrace(session, directory)
+            trace = FullStepTrace(session, directory, capture_mode=capture_mode, debug_stride=debug_stride)
             trace.set_phase("初始化与原生搭建", public=False, kind="setup")
             trace.capture_current("原生初始化返回")
             write_json(directory / "initial_inventory.json", session.snapshot())
@@ -390,10 +394,15 @@ def main(argv=None):
     p.add_argument("--seed", type=int, default=17)
     p.add_argument("--scene-limit", type=int, default=30)
     p.add_argument("--debug-views", action="store_true", help="Enable private fixed/overview/detail diagnostic cameras")
+    p.add_argument("--capture-mode", choices=("debug", "full"), default="debug",
+                   help="Default debug keeps key frames and samples ordinary steps; full captures every step")
+    p.add_argument("--debug-stride", type=int, default=3, help="Ordinary-step sampling stride in debug capture mode")
     p.add_argument("--platform", choices=("CloudRendering", "Linux64"), default=None)
     args = p.parse_args(argv)
     if not 1 <= args.scene_limit <= 30:
         p.error("--scene-limit must be between 1 and 30")
+    if args.debug_stride < 1:
+        p.error("--debug-stride must be positive")
     available = cases()
     ids = [c.case_id for c in available if c.case_id not in FROZEN_CASES] if args.all else (args.cases or "H05-1").split(",")
     if len(ids) != len(set(ids)) or set(ids) - {c.case_id for c in available}:
@@ -421,7 +430,7 @@ def main(argv=None):
         config["platform"] = args.platform
     result = generate(selected, args.out, config, build_cache=args.build_cache_dir,
                       executable=executable, seed=args.seed, scene_limit=args.scene_limit,
-                      debug_views=args.debug_views)
+                      debug_views=args.debug_views, capture_mode=args.capture_mode, debug_stride=args.debug_stride)
     for row in result:
         if not row["published_inputs"]:
             print(f"[hard_generate] {row['case_id']} {row['status']}: {row.get('error', 'no published input')}",
