@@ -38,6 +38,8 @@ class CupFixture:
         self.events = []
         self.checks = []
         self.public_phase = False
+        self.navigation_attempts = []
+        self.agent = {"position": {"x": 0., "y": .9, "z": 0.}, "rotation": {"y": 0}, "cameraHorizon": 0}
         self.session = self
         self.trace = self
         self.ops = self
@@ -48,7 +50,7 @@ class CupFixture:
 
     def snapshot(self):
         return {"objects": copy.deepcopy(list(self.objects.values())), "inventoryObjects": self.inventory(),
-                "agent": {"rotation": {"y": 0}, "cameraHorizon": 0}}
+                "agent": copy.deepcopy(self.agent)}
 
     def inventory(self):
         return [{"objectId": oid} for oid in self.held]
@@ -101,7 +103,10 @@ class CupFixture:
                     obj.update(isFilledWithLiquid=False, fillLiquid=None)
             if self.contact and self.objects["f"]["isToggled"] and obj["position"]["z"] >= .18:
                 obj.update(isFilledWithLiquid=True, fillLiquid="water")
-        return SimpleNamespace(record=row)
+        metadata = self.snapshot()
+        if action == "GetReachablePositions":
+            metadata["actionReturn"] = copy.deepcopy(getattr(self, "reachable_positions", []))
+        return SimpleNamespace(record=row, metadata=metadata)
 
 
 class H01NaturalTests(unittest.TestCase):
@@ -228,6 +233,51 @@ class H01NaturalTests(unittest.TestCase):
             self.assertNotIn("private-checkpoint-native-id", text)
             self.assertNotIn("private-checkpoint-gold", text)
             self.assertNotIn("checkpoints", json.loads(text)["model_input"])
+
+    def test_visible_faucet_requires_closer_native_stance_before_hand_motion(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ctx = CupFixture(temp)
+            ctx.reachable_positions = [{"x": x, "y": .9, "z": 0.} for x in (0., -.25, -.5)]
+            walked = []
+
+            def walk(point):
+                delta = point["x"] - ctx.agent["position"]["x"]
+                ctx.objects["a"]["position"]["x"] += delta
+                ctx.agent["position"] = copy.deepcopy(point)
+                walked.append(copy.deepcopy(point))
+
+            ctx.navigator = SimpleNamespace(_walk=walk, _aim=lambda obj: None, action_count=0)
+            story = H01Natural(ctx)
+            story.begin("C03-A")
+            story.pickup("A")
+            goal = {"x": -1., "y": 1., "z": 0.}
+            position = story.approach_water("A", [goal])
+            self.assertEqual(position["x"], -.5)
+            self.assertTrue(walked)
+            evidence = ctx.navigation_attempts[-1]
+            self.assertGreater(evidence["initial_hand_distances_m"][0], evidence["hand_budget_m"])
+            self.assertLessEqual(evidence["attempts"][-1]["actual_hand_distances_m"][0], evidence["hand_budget_m"])
+            self.assertEqual(evidence["hand_budget_m"], .85)
+            self.assertEqual(evidence["status"], "walked_within_hand_budget")
+            self.assertNotIn("MoveHeldObject", [r["action"] for r in ctx.records])
+
+    def test_public_water_approach_reuses_verified_standing_position(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ctx = CupFixture(temp)
+            ctx.reachable_positions = [{"x": x, "y": .9, "z": 0.} for x in (0., -.25, -.5)]
+
+            def walk(point):
+                ctx.objects["a"]["position"]["x"] += point["x"] - ctx.agent["position"]["x"]
+                ctx.agent["position"] = copy.deepcopy(point)
+
+            ctx.navigator = SimpleNamespace(_walk=walk, _aim=lambda obj: None, action_count=0)
+            story = H01Natural(ctx)
+            story.begin("T01-W02")
+            story.pickup("A")
+            preferred = {"x": -.25, "y": .9, "z": 0.}
+            result = story.approach_water("A", [{"x": .2, "y": 1., "z": 0.}], preferred=preferred)
+            self.assertEqual(result, preferred)
+            self.assertEqual(ctx.navigation_attempts[-1]["preferred_verified_position"], preferred)
 
 
 if __name__ == "__main__":

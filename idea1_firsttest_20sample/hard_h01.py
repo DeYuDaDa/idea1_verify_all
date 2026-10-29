@@ -11,6 +11,7 @@ import math
 from pathlib import Path
 
 from hard_export import write_json
+from hard_navigation import floor_distance, shortest_grid_route, xyz
 from hard_scenarios import (HardConstructionError, _role, _surface_candidates,
                             _set_waypoint, _native_setup_place, _calibrate_forward,
                             _move, _target_event, _questions, _q)
@@ -162,6 +163,13 @@ class H01Natural:
         if self.active and self.active["status"] == "running":
             self.active["status"] = "failed"
             self.active["error"] = f"{type(exc).__name__}: {exc}"
+            self.active["native_receipts"] = copy.deepcopy(self.ctx.session.records[self.active["action_index_start"]:])
+            self.active["state"] = {alias: {key: self.ctx.obj(alias).get(key) for key in FIELDS}
+                                    for alias in self.ctx.roles}
+            if self.active["id"].startswith("C03-"):
+                calibration = self.calibrations.get(self.active["id"][-1])
+                if calibration is not None:
+                    calibration.update(status="failed", error=str(exc))
             try:
                 self.capture(self.active["id"] + " / 停止位置")
             except Exception as capture_exc:
@@ -195,6 +203,60 @@ class H01Natural:
         self.guard()
         self.ctx.navigate_to(role, "H01-1_native_history")
         self.guard()
+
+    def approach_water(self, role, goals, *, preferred=None):
+        """H01-only approach: seeing a faucet is not enough to reach its water.
+
+        Keep the 0.85 m hand-motion budget. Walk on actual reachable positions
+        first, using the existing collision-checked native route primitives.
+        Formal trials replay the privately verified standing position.
+        """
+        self.navigate("Faucet")
+        start = xyz(self.ctx.session.snapshot()["agent"])
+        diagnostic = {"method": "H01-1_water_hand_reach", "role": role,
+            "start_agent_position": start, "preferred_verified_position": preferred,
+            "hand_budget_m": MAX_HAND_DISTANCE,
+            "initial_hand_distances_m": [distance(center(self.ctx.obj(role)), goal) for goal in goals],
+            "attempts": []}
+        self.ctx.navigation_attempts.append(diagnostic)
+        if (preferred is None or floor_distance(start, preferred) <= .025) and min(diagnostic["initial_hand_distances_m"]) <= MAX_HAND_DISTANCE:
+            diagnostic.update(status="already_within_hand_budget", final_agent_position=start)
+            return start
+        result = self.step("GetReachablePositions")
+        points = [xyz(point) for point in (result.metadata.get("actionReturn") or [])]
+        self.ctx.require(bool(points), "Water approach has no native reachable positions")
+        if preferred is not None:
+            candidates = [p for p in points if floor_distance(p, preferred) <= .025]
+        else:
+            candidates = [p for p in points if min(floor_distance(p, goal) for goal in goals) <= .95]
+            candidates.sort(key=lambda p: (min(floor_distance(p, g) for g in goals), floor_distance(start, p)))
+        navigator = self.ctx.navigator
+        navigator.action_count = 0
+        for point in candidates[:4]:
+            route = shortest_grid_route(points, xyz(self.ctx.session.snapshot()["agent"]), point)
+            attempt = {"candidate_agent_position": point, "route_points": len(route) if route else 0}
+            diagnostic["attempts"].append(attempt)
+            if not route:
+                attempt["error"] = "No connected native route"
+                continue
+            # A native collision failure stays a failure; do not teleport or
+            # silently carry on from an unverified pose.
+            for waypoint in route:
+                navigator._walk(waypoint)
+                self.guard()
+                self.ctx.require(self.holding(role) and liquid(self.ctx.obj(role)) == "Empty",
+                                 "Water approach lost its original empty held cup")
+            navigator._aim(self.ctx.obj("Faucet"))
+            self.guard()
+            ranges = [distance(center(self.ctx.obj(role)), goal) for goal in goals]
+            attempt["actual_hand_distances_m"] = ranges
+            if min(ranges) <= MAX_HAND_DISTANCE:
+                actual = xyz(self.ctx.session.snapshot()["agent"])
+                diagnostic.update(status="walked_within_hand_budget", final_agent_position=actual)
+                self.capture((self.active or {})["id"] + " / 接水近距离站位确认")
+                return actual
+        diagnostic["status"] = "no_reachable_stance_within_hand_budget"
+        raise HardConstructionError("Water faucet visible but no native standing pose brings the held cup within the hand budget")
 
     def source(self, on):
         if self.ctx.obj("Faucet").get("isToggled") is not on:
@@ -319,10 +381,8 @@ class H01Natural:
     def calibrate_water(self, role):
         self.begin("C03-" + role)
         self.pickup(role)
-        self.navigate("Faucet")
         self.source(False)
         self.ctx.require(liquid(self.ctx.obj(role)) == "Empty", "Calibration cup must start empty")
-        start = center(self.ctx.obj(role))
         faucet, basin = center(self.ctx.obj("Faucet")), center(self.ctx.obj("SinkBasin"))
         basin_height = float((self.ctx.obj("SinkBasin").get("axisAlignedBoundingBox") or {}).get("size", {}).get("y", .15))
         height = min(float(faucet["y"]) - 0.10,
@@ -333,8 +393,12 @@ class H01Natural:
                       for t in (0.5, 1., 0., .25, .75)]
         trials = []
         self.calibrations[role] = {"status": "searching", "trials": trials}
+        stance = self.approach_water(role, candidates)
+        self.calibrations[role]["approach_agent_position"] = stance
+        start = center(self.ctx.obj(role))
         for index, goal in enumerate(candidates):
-            trial = {"candidate": index, "goal_center": goal, "start_center": start}
+            trial = {"candidate": index, "goal_center": goal, "start_center": start,
+                     "hand_distance_m": distance(start, goal)}
             trials.append(trial)
             self.persist()
             try:
@@ -385,7 +449,8 @@ class H01Natural:
         self.pickup(role, anchor=first)
         self.finish(self.facts(role, "Empty", held=True))
         self.begin(stage + "-W02")
-        self.navigate("Faucet")
+        self.approach_water(role, [self.calibrations[role]["goal_center"]],
+                            preferred=self.calibrations[role].get("approach_agent_position"))
         start = center(self.ctx.obj(role))
         self.finish(self.facts(role, "Empty", held=True) + [("水龙头关闭", False, self.ctx.obj("Faucet").get("isToggled"))])
         self.begin(stage + "-W03")
