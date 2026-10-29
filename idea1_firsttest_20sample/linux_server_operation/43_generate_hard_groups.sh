@@ -60,7 +60,7 @@ source_names = ["runtime.py", "full_step_trace.py", "hard_context.py", "hard_che
                 "linux_server_operation/56_generate_h01_1.sh", "linux_server_operation/56_H01-1单题生成与检查.md",
                 "linux_server_operation/59_generate_h01_remaining.sh", "linux_server_operation/60_generate_h05_remaining.sh",
                 "linux_server_operation/61_recheck_h02_1.sh", "linux_server_operation/63_分组生成封存与评测安排_20261029.md",
-                "tests/test_hard_h05_checkpoints.py",
+                "tests/test_hard_h05_checkpoints.py", "tests/test_hard_variant_prerequisites.py",
                 "nested_setup.py", "New-WebReview.ps1", "review_web/review.js", "config.json",
                 "docs/ai2thor_object_reference.md", "linux_server_operation/43_generate_hard_groups.sh",
                 "困难组逐题流程与全程采集核对_20261027.md", "linux_server_operation/44_困难组生成与网页审核.md",
