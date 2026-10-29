@@ -79,6 +79,9 @@ def _identity_history(ctx):
     baseline = world_state(ctx.session.snapshot())["objects"]
     anchors = []
     for alias in public_roles(ctx):
+        if alias in getattr(ctx, "identity_on_first_pickup", set()):
+            # H01-1 grounds these aliases at their first actual public pickup.
+            continue
         ctx.phase(f"公开初态身份巡视：{alias}", public=True, kind="history")
         ctx.navigate_to(alias, "initial_first_person_identity")
         event = ctx.session.controller.last_event

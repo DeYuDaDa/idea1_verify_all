@@ -99,9 +99,48 @@
         const title=frame.source_status==='generation_failed'?'原始图片生产失败':frame.source_status==='file_missing'?'原始文件缺失':frame.source_status==='invalid_path'?'原始路径不兼容':'原始记录没有可用图片';
         const box=el('div',title,'missing');box.append(el('small',frame.source_message||'此处证据不完整；旧网页包没有记录缺失原因。'));figure.append(box);
       }
-      const text=el('figcaption',caption);if(note?.process)text.append(el('span',note.process,'frame-process'));if(identityRegions.length)text.append(el('span','初态身份框仅辅助显示输入文本中已有的定位信息，原图未修改。','identity-caption'));figure.append(text);$('images').append(figure);
+      const text=el('figcaption',caption);if(note?.process)text.append(el('span',note.process,'frame-process'));if(identityRegions.length)text.append(el('span',identityRegions.some(r=>r.anchor_kind==='first_public_pickup')?'首次拿取身份框对应公开命名规则，原图未修改。':'初态身份框仅辅助显示输入文本中已有的定位信息，原图未修改。','identity-caption'));figure.append(text);$('images').append(figure);
+      const map=item.protocol==='hard-selective-V/v1'?(item.audit_timeline?.public_frame_map||[]).find(m=>m.frame_index===i+1):item.kind==='diagnostic'?frame:null;
+      if(map){
+        const labels=(item.audit_timeline?.checkpoints||[]).flatMap(cp=>(cp.evidence||[])
+          .filter(e=>stepMatches(map,e.global_step)).map(e=>`${cp.id} · ${e.label}`));
+        if(labels.length)text.append(el('span',`审核检查点（私有标记）：${[...new Set(labels)].join('；')}`,'checkpoint-badge'));
+      }
     });
     if(!item.frames.length) $('images').append(el('div',item.protocol==='hard-selective-S/v1'?'本条件有意不提供图像；S 是文本状态诊断。请勿把私有审计画面当作模型输入。':item.kind==='diagnostic'?`本次尝试在“${item.scene||'未标注阶段'}”停止，状态：${item.status||'未记录'}。${item.error||'未记录具体失败原因。'}${item.timeline_status==='missing'?' 原生时间线缺失，无法确认更具体的停止步骤。':item.timeline_status==='no_frames'?' 已找到时间线，但没有可显示的原生帧。':' 请在下方诊断记录核对停止点及未完成的预定后续步骤。'}`:'此记录没有截图。',item.protocol==='hard-selective-S/v1'?'':'missing'));
+  }
+  function stepMatches(group,step) {
+    if(step==null)return false;
+    return Array.isArray(group.step_numbers)&&group.step_numbers.length?group.step_numbers.includes(step):
+      group.start_step!=null&&group.end_step!=null&&step>=group.start_step&&step<=group.end_step;
+  }
+  function drawCheckpoints(item) {
+    document.getElementById('checkpoint-review')?.remove();
+    const points=item.audit_timeline?.checkpoints||[];if(!points.length)return;
+    const panel=el('details');panel.id='checkpoint-review';panel.className='private-audit';panel.open=true;
+    panel.append(el('summary','程序检查点与对应图片（私有审核，不属于模型输入）'),
+      el('p','按编号对照设计、状态与画面。程序通过仅代表列出的字段和图片完整性通过；杯口、液面、流水位置关系及身份连续性仍需人工审核。未执行的节点没有结果。'));
+    const status={passed:'程序通过，视觉待审核',failed:'失败',running:'执行中断',not_executed:'未执行'};
+    for(const cp of points){
+      const detail=el('details');detail.className='checkpoint-row';detail.open=cp.status==='failed';
+      detail.append(el('summary',`${cp.id} · ${cp.title} · ${cp.public?'公开历史/目标':'私有准备'} · ${status[cp.status]||cp.status}`));
+      if(cp.error)detail.append(el('p',cp.error,'source-warning'));
+      const table=el('table'),head=el('tr');for(const name of ['检查项','预期','实际','结果'])head.append(el('th',name));table.append(head);
+      for(const f of cp.facts||[]){const tr=el('tr');for(const value of [f.fact,json(f.expected),json(f.actual),f.passed?'通过':'失败'])tr.append(el('td',value));table.append(tr);}
+      if((cp.facts||[]).length)detail.append(table);
+      const images=el('div','','checkpoint-images');
+      for(const e of cp.evidence||[]){
+        const group=(item.audit_timeline.capture_groups||[]).find(g=>stepMatches(g,e.global_step));
+        const view=group?.views?.find(v=>v.view_id==='agent');
+        const figure=el('figure');figure.append(el('figcaption',`${e.label} · 全局步 ${e.global_step??'?'}${group?.duplicate_count?` · 与同组图片共用文件，重复${group.duplicate_count}次`:''}`));
+        if(view?.src){const button=el('button');button.type='button';const img=el('img');img.src=view.src;img.alt=e.label;img.loading='lazy';button.append(img);button.addEventListener('click',()=>{$('large-image').src=view.src;$('lightbox-label').textContent=e.label;$('lightbox').showModal();});figure.append(button);}
+        else figure.append(el('p','检查点没有匹配到可用的实际图片，不能用相邻图片补齐。','source-warning'));
+        images.append(figure);
+      }
+      detail.append(images);
+      const raw=el('details');raw.append(el('summary','原生回执和完整状态（私有）'),el('pre',json({native_receipts:cp.native_receipts,state:cp.state,inventory:cp.inventory,observation_samples:cp.observation_samples})));detail.append(raw);panel.append(detail);
+    }
+    $('images').parentElement.insertAdjacentElement('beforebegin',panel);
   }
   function validIdentityRegion(region) {
     const box=region?.pixel_bbox;
@@ -192,6 +231,7 @@
       $('raw-panel').querySelector('details').hidden=true;$('raw-presentation').textContent='';
     }
     drawImages(item);
+    drawCheckpoints(item);
     $('prompt-panel').hidden=isDiagnostic||(!isDataset&&!p);
     $('prompt-panel').open=isDataset;
     $('prompt-title').textContent=p?'候选模型输入全文（新整理的文本，可直接审阅）':item.request_origin==='prepared'?'冻结的完整模型输入文本':item.request_origin==='recorded'?'模型输入原文':'模型输入（当前 runner 重建）';

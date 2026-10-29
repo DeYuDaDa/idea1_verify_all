@@ -538,6 +538,10 @@ def _q(subject: str, predicate: str, answer_mode: str, question: str):
 
 
 def _h01(ctx: Any, variant: int):
+    if variant == 1:
+        # Only this approved question uses the new natural-water history.
+        from hard_h01 import run_h01_1
+        return run_h01_1(ctx)
     _role(ctx, "A", "Mug", "canFillWithLiquid")
     _role(ctx, "B", "Mug", "canFillWithLiquid", exclude=("A",))
     _role(ctx, "M", "CoffeeMachine")

@@ -44,7 +44,10 @@ def public_roles(ctx):
     wanted = {"H01": ("A", "B", "M"), "H02": ("P", "Q", "X"),
               "H03": ("KA", "KB", "BA", "BB", "X", "Y"),
               "H04": ("P", "B", "X"), "H05": ("Microwave", "Z")}
-    return [a for a in wanted[ctx.group_id] if a in ctx.roles]
+    roles = list(wanted[ctx.group_id])
+    if getattr(ctx, "h01_natural", False):
+        roles.append("Faucet")
+    return [a for a in roles if a in ctx.roles]
 
 
 def _objects(ctx):
@@ -146,6 +149,11 @@ def write_audit_timeline(ctx, trace, case):
         "boundaries": [{**r, "step_index": r["global_step"]} for r in boundaries],
         "steps": ([{"采集检查": ctx.capture_diagnostics}] if getattr(ctx, "capture_diagnostics", None) else []) + trace.events,
         "checks": ctx.checks,
+        "checkpoints": copy.deepcopy(getattr(ctx, "h01_checkpoints", [])),
+        "public_frame_map": [{"frame_index": i, "start_step": frame["start_step"],
+                               "end_step": frame["end_step"], "step_numbers": frame.get("step_numbers", [])}
+                              for i, frame in enumerate(trace.model_frames(), 1)]
+                             if getattr(ctx, "h01_natural", False) else [],
         "note": "完整私有轨迹，含准备、失败与原生参数，不属于模型输入。",
     })
 
@@ -181,6 +189,7 @@ def export_case(ctx, trace, root, case):
                           or group_index is not None and f["start_step"] <= group_index <= f["end_step"])), None)
         if matching is not None:
             anchors.append({"alias": anchor["alias"], "view_id": "agent",
+                            **({"anchor_kind": anchor["anchor_kind"]} if anchor.get("anchor_kind") else {}),
                             "pixel_bbox": anchor["pixel_bbox"],
                             "initial_frame_index": matching,
                             "initial_capture_group_index": frames[matching - 1]["capture_group_index"]})
