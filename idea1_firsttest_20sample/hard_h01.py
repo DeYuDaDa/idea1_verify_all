@@ -1,4 +1,4 @@
-"""H01-1 only: natural water contact, real spilling, private checkpoint evidence.
+"""H01 variants: natural water contact, real spilling, private checkpoint evidence.
 
 No simulator on import. All changes use ControllerSession native steps. Geometry
 is screened privately; missing contact is a construction failure, never a fill
@@ -77,21 +77,35 @@ def parked(ctx, role):
             and child.get("isPickedUp") is False)
 
 
-def checkpoint_plan():
+def variant_spec(variant):
+    if variant not in (1, 2, 3, 4):
+        raise ValueError("H01 variant must be 1..4")
+    first, second = ("A", "B") if variant in (1, 4) else ("B", "A")
+    target = "A" if variant in (1, 2) else "B"
+    before = {first: "Empty", second: "Water"}
+    after = {**before, target: "Coffee" if before[target] == "Empty" else "Water"}
+    return {"first": first, "second": second, "target": target,
+            "other": "B" if target == "A" else "A", "before": before, "after": after}
+
+
+def checkpoint_plan(variant=1):
+    spec = variant_spec(variant)
+    first, second, target = spec["first"], spec["second"], spec["target"]
     rows = [("C01", "物品、水源与停放位"), ("C02", "机器槽位与原生恢复"),
             ("C03-A", "A 私有自然接水与倾倒验证"), ("C03-B", "B 私有自然接水与倾倒验证"),
             ("C04", "正式初态：两杯空、设备关、手空")]
-    for stage, role in (("T01", "A"), ("T02", "B"), ("T05", "B")):
+    for stage, role in (("T01", first), ("T02", second), ("T05", second)):
         for suffix, title in (("W01", "拿起空杯"), ("W02", "接近但尚未接水"),
                               ("W03", "流水开启、杯仍空"), ("W04", "流水下自然接水"),
                               ("W05", "移离关水、保留水"), ("W06", "展示液面并归位")):
             rows.append((stage + "-" + suffix, role + " / " + title))
-    for stage, role in (("T03", "A"), ("T04", "B")):
+    for stage, role in (("T03", first), ("T04", second)):
         for suffix, title in (("D01", "拿起后仍有水"), ("D02", "倾倒触发清空"),
                               ("D03", "扶正后仍空"), ("D04", "展示空杯并归位")):
             rows.append((stage + "-" + suffix, role + " / " + title))
-    rows += [("T06", "开启咖啡机、两杯保持"), ("T07", "正确空杯 A 在手、目标前核对"),
-             ("T08", "真实放入机器的回执与关系"), ("T09", "A咖啡、B水、位置与设备状态")]
+    rows += [("T06", "开启咖啡机、两杯保持"), ("T07", f"正确的 {target} 在手、目标前核对"),
+             ("T08", "真实放入机器的回执与关系"),
+             ("T09", f"实际后态：A={spec['after']['A']}、B={spec['after']['B']}，位置与设备状态")]
     order = ["C01", "C02", "C03-A", "C03-B", "C04", "T01", "T02", "T03", "T04",
              "T05", "T06", "T07", "T08", "T09"]
     rows.sort(key=lambda row: order.index(row[0] if row[0].startswith("C") else row[0][:3]))
@@ -100,11 +114,14 @@ def checkpoint_plan():
 
 
 class H01Natural:
-    def __init__(self, ctx):
+    def __init__(self, ctx, variant=1):
         self.ctx = ctx
+        self.variant = variant
+        self.spec = variant_spec(variant)
+        self.case_id = f"H01-{variant}"
         ctx.h01_natural = True
         ctx.identity_on_first_pickup = {"A", "B"}
-        ctx.h01_checkpoints = checkpoint_plan()
+        ctx.h01_checkpoints = checkpoint_plan(variant)
         self.active = None
         self.other_baseline = None
         self.expected_machine = False
@@ -115,7 +132,7 @@ class H01Natural:
 
     def persist(self):
         write_json(self.ctx.out / "h01_checkpoints.json", {
-            "schema": "h01-checkpoints/v1", "case_id": "H01-1",
+            "schema": "h01-checkpoints/v1", "case_id": self.case_id, "variant": self.variant,
             "checkpoints": self.ctx.h01_checkpoints, "calibrations": self.calibrations,
             "pending_spill_relative_rolls": self.pending_spill_rolls,
             "contact_passes": CONTACT_PASSES, "hand_step_m": MAX_HAND_STEP,
@@ -157,9 +174,9 @@ class H01Natural:
                               "actual": media_ok, "passed": media_ok})
         passed = all(f["passed"] for f in row["facts"])
         row["status"] = "passed" if passed else "failed"
-        self.ctx.check("H01-1/" + row["id"], passed, {"facts": row["facts"]})
+        self.ctx.check(self.case_id + "/" + row["id"], passed, {"facts": row["facts"]})
         self.persist()
-        self.ctx.require(passed, "H01-1 checkpoint failed: " + row["id"] + " / " + str(row["facts"]))
+        self.ctx.require(passed, self.case_id + " checkpoint failed: " + row["id"] + " / " + str(row["facts"]))
 
     def fail(self, exc):
         if self.active and self.active["status"] == "running":
@@ -554,8 +571,10 @@ class H01Natural:
         self.calibrate_water("A")
         self.calibrate_water("B")
         self.other_baseline = None
+        first, second, target, other = (self.spec[k] for k in ("first", "second", "target", "other"))
+        before_values, after_values = self.spec["before"], self.spec["after"]
         ctx.public_declarations.extend([
-            "正式历史中第一次拿起来接水的杯子记为A；随后第一次拿起来接水的另一只杯子记为B。后续反复拿取仍沿用这两个身份，私有校准不计入。",
+            f"正式历史中第一次拿起来接水的杯子记为{first}；随后第一次拿起来接水的另一只杯子记为{second}。后续反复拿取仍沿用这两个身份，私有校准不计入。",
             "初态两杯均空，位于各自外部停放位；咖啡机和水龙头关闭。空杯接触流水可装水，持杯大幅倾斜可倒空；流水关闭后不会继续接水。"])
         ctx.start_history()
         public_action_start = len(ctx.session.records)
@@ -567,27 +586,28 @@ class H01Natural:
                      ("A归位", True, parked(ctx, "A")), ("B归位", True, parked(ctx, "B")),
                      ("M关闭", False, ctx.obj("M").get("isToggled")),
                      ("水龙头关闭", False, ctx.obj("Faucet").get("isToggled")), ("手空", True, self.empty_hand())])
-        self.water("A", "T01", first=True)
-        self.water("B", "T02", first=True)
-        self.spill("A", "T03")
-        self.spill("B", "T04")
-        self.water("B", "T05")
+        self.water(first, "T01", first=True)
+        self.water(second, "T02", first=True)
+        self.spill(first, "T03")
+        self.spill(second, "T04")
+        self.water(second, "T05")
         self.other_baseline = None
         self.begin("T06")
         self.navigate("M")
         ctx.step("ToggleObjectOn", objectId=ctx.roles["M"], forceAction=True)
         self.expected_machine = True
-        self.finish([("A空", "Empty", liquid(ctx.obj("A"))), ("B水", "Water", liquid(ctx.obj("B"))),
+        self.finish([("A液体", before_values["A"], liquid(ctx.obj("A"))),
+                     ("B液体", before_values["B"], liquid(ctx.obj("B"))),
                      ("A归位", True, parked(ctx, "A")), ("B归位", True, parked(ctx, "B")),
                      ("M开启", True, ctx.obj("M").get("isToggled")),
                      ("机器无任务杯", True, not any(ctx.roles[r] in (ctx.obj("M").get("receptacleObjectIds") or []) for r in ("A", "B")))])
         self.begin("T07")
-        self.pickup("A")
+        self.pickup(target)
         self.navigate("M")
-        self.finish(self.facts("A", "Empty", held=True) + [("A尚未入机", False,
-            ctx.roles["M"] in (ctx.obj("A").get("parentReceptacles") or []))])
+        self.finish(self.facts(target, before_values[target], held=True) + [(target + "尚未入机", False,
+            ctx.roles["M"] in (ctx.obj(target).get("parentReceptacles") or []))])
         self.begin("T08")
-        event = _target_event(ctx, "PutObject", "A", "M")
+        event = _target_event(ctx, "PutObject", target, "M")
         # The shared target helper includes the fixed Pass-0/Pass-4 window.
         # Link the actual PutObject return (not the later settled image) too.
         for recorded in ctx.trace.events:
@@ -599,11 +619,11 @@ class H01Natural:
         before = {o["objectId"]: o for o in ctx.before_target["objects"]}
         self.guard()
         self.finish([("PutObject成功", True, event.get("success")),
-                     ("实际事件前A空", "Empty", liquid(before[ctx.roles["A"]])),
-                     ("事件源是A", [ctx.roles["A"]], [o.get("objectId") for o in ctx.before_target.get("inventoryObjects",
+                     ("实际事件前目标杯液体", before_values[target], liquid(before[ctx.roles[target]])),
+                     ("事件源是正确目标杯", [ctx.roles[target]], [o.get("objectId") for o in ctx.before_target.get("inventoryObjects",
                          ctx.before_target.get("agent", {}).get("inventoryObjects", []))]),
-                     ("A在M中", True, ctx.roles["M"] in (ctx.obj("A").get("parentReceptacles") or [])),
-                     ("机器包含A", True, ctx.roles["A"] in (ctx.obj("M").get("receptacleObjectIds") or [])),
+                     ("目标杯在M中", True, ctx.roles["M"] in (ctx.obj(target).get("parentReceptacles") or [])),
+                     ("机器包含目标杯", True, ctx.roles[target] in (ctx.obj("M").get("receptacleObjectIds") or [])),
                      ("手空", True, self.empty_hand())])
         self.begin("T09")
         self.active["observation_samples"] = copy.deepcopy(event["observation_samples"])
@@ -612,30 +632,34 @@ class H01Natural:
             if recorded.get("phase_kind") == "observation" and recorded.get("frame_status") == "captured":
                 self.active["evidence"].append({"label": "T09 / " + recorded.get("phase_label", "观察窗口"),
                     **{k: copy.deepcopy(recorded.get(k)) for k in ("global_step", "action_index", "frame_status", "frames")}})
-        b_old = self.other_baseline[1]
-        preserved = all(liquid(sample["metadata"]["B"]) == "Water"
-                        and distance(sample["metadata"]["B"]["position"], b_old["position"]) <= POSITION_EPS
-                        and ctx.roles["M"] not in (sample["metadata"]["B"].get("parentReceptacles") or [])
+        other_old = self.other_baseline[1]
+        preserved = all(liquid(sample["metadata"][other]) == before_values[other]
+                        and distance(sample["metadata"][other]["position"], other_old["position"]) <= POSITION_EPS
+                        and ctx.roles["M"] not in (sample["metadata"][other].get("parentReceptacles") or [])
                         for sample in event["observation_samples"])
         forbidden = {"FillObjectWithLiquid", "EmptyLiquidFromObject", "SetObjectPoses",
                      "PlaceObjectAtPoint", "Teleport", "TeleportFull", "InitialRandomSpawn"}
         shortcuts = [record for record in ctx.session.records[public_action_start:] if record.get("action") in forbidden]
-        self.finish(self.facts("A", "Coffee") + [("A在M中", True,
-            ctx.roles["M"] in (ctx.obj("A").get("parentReceptacles") or [])),
-            ("B水", "Water", liquid(ctx.obj("B"))), ("B归位", True, parked(ctx, "B")),
+        self.finish(self.facts(target, after_values[target]) + [("目标杯在M中", True,
+            ctx.roles["M"] in (ctx.obj(target).get("parentReceptacles") or [])),
+            ("另一杯液体", after_values[other], liquid(ctx.obj(other))), ("另一杯归位", True, parked(ctx, other)),
             ("水龙头关闭", False, ctx.obj("Faucet").get("isToggled")), ("手空", True, self.empty_hand()),
-            ("Pass0到固定窗口末端B保持水与位置", True, preserved),
+            ("Pass0到固定窗口末端另一杯保留液体与位置", True, preserved),
             ("公开历史没有直接填水清空或传送捷径", [], shortcuts)])
         _questions(ctx, [
-            _q("A", "liquid", "enum:Empty|Water|Coffee", "A（正式历史中最先拿起来接水的杯子）现在是空的、装水还是装咖啡？"),
-            _q("B", "liquid", "enum:Empty|Water|Coffee", "B（随后第一次拿起来接水的另一只杯子）现在是空的、装水还是装咖啡？"),
+            _q("A", "liquid", "enum:Empty|Water|Coffee", f"A（正式历史中{'最先' if first == 'A' else '随后第一次'}拿起来接水的杯子）现在是空的、装水还是装咖啡？"),
+            _q("B", "liquid", "enum:Empty|Water|Coffee", f"B（正式历史中{'最先' if first == 'B' else '随后第一次'}拿起来接水的杯子）现在是空的、装水还是装咖啡？"),
             _q("A", "location", "semantic_location", "A 杯现在在哪里？"),
             _q("B", "location", "semantic_location", "B 杯现在在哪里？"),
             _q("M", "isToggled", "boolean", "咖啡机现在开启了吗？")])
 
 
 def run_h01_1(ctx):
-    story = H01Natural(ctx)
+    return run_h01(ctx, 1)
+
+
+def run_h01(ctx, variant):
+    story = H01Natural(ctx, variant)
     try:
         story.run()
     except Exception as exc:

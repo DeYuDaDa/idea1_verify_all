@@ -44,7 +44,7 @@ try {
         }
     }
 } finally { $zip.Dispose() }
-$receipt = [ordered]@{schema='hard-accepted-raw-copy/v1'; case_ids=@($policy.case_ids); human_acceptance_date=$policy.accepted_on;
+$receipt = [ordered]@{schema='hard-accepted-raw-copy/v1'; case_ids=@('H04-2','H04-3'); human_acceptance_date=$policy.accepted_on;
     original_zip=$source; original_zip_sha256=$digest; original_bytes_unchanged=$true;
     model_evaluated=$false; copied_file_count=$copied.Count; files=@($copied.ToArray())}
 $receipt | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $target 'acceptance_manifest.json') -Encoding utf8

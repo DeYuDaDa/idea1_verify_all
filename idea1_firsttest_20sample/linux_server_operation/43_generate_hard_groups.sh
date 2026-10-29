@@ -23,7 +23,7 @@ while (($#)); do
 done
 printf '\n[43] Checking source and mock contracts before starting Unity. No model environment is used.\n'
 printf '[43] Capture defaults to debug (key frames + ordinary stride 3). Use --capture-mode full for the final dense visual dataset.\n'
-run_python -m compileall -q runtime.py full_step_trace.py hard_context.py hard_navigation.py hard_inventory.py hard_inventory_prepare.py hard_scene_survey.py hard_contracts.py hard_scenarios.py hard_h01.py hard_camera.py hard_export.py hard_generate.py
+run_python -m compileall -q runtime.py full_step_trace.py hard_context.py hard_checkpoint.py hard_navigation.py hard_inventory.py hard_inventory_prepare.py hard_scene_survey.py hard_contracts.py hard_scenarios.py hard_h01.py hard_camera.py hard_export.py hard_generate.py
 for pattern in 'test_hard_*.py' 'test_full_step_trace.py' 'test_interactions.py' 'test_camera.py' 'test_nested_setup.py' 'test_offline_runner.py'; do
   run_python -m unittest discover -s tests -p "$pattern" -v || die "Preflight tests failed; Unity has not started. Return this log."
 done
@@ -54,10 +54,13 @@ root, archive_path, stage_log, project = map(Path, sys.argv[1:])
 (root / "_run").mkdir(exist_ok=True)
 shutil.copyfile(stage_log, root / "_run" / "stage_log_snapshot.txt")
 entries = [(p, "dataset/" + p.relative_to(root).as_posix()) for p in root.rglob("*") if p.is_file()]
-source_names = ["runtime.py", "full_step_trace.py", "hard_context.py", "hard_navigation.py", "hard_inventory.py", "hard_inventory_prepare.py", "hard_scene_survey.py", "hard_contracts.py", "hard_scenarios.py", "hard_h01.py", "hard_camera.py",
+source_names = ["runtime.py", "full_step_trace.py", "hard_context.py", "hard_checkpoint.py", "hard_navigation.py", "hard_inventory.py", "hard_inventory_prepare.py", "hard_scene_survey.py", "hard_contracts.py", "hard_scenarios.py", "hard_h01.py", "hard_camera.py",
                 "hard_export.py", "hard_generate.py", "interactions.py", "view_planning.py", "observation_views.py",
                 "review_web/review.css", "review_web/index.html", "tests/test_hard_h01.py",
                 "linux_server_operation/56_generate_h01_1.sh", "linux_server_operation/56_H01-1单题生成与检查.md",
+                "linux_server_operation/59_generate_h01_remaining.sh", "linux_server_operation/60_generate_h05_remaining.sh",
+                "linux_server_operation/61_recheck_h02_1.sh", "linux_server_operation/63_分组生成封存与评测安排_20261029.md",
+                "tests/test_hard_h05_checkpoints.py",
                 "nested_setup.py", "New-WebReview.ps1", "review_web/review.js", "config.json",
                 "docs/ai2thor_object_reference.md", "linux_server_operation/43_generate_hard_groups.sh",
                 "困难组逐题流程与全程采集核对_20261027.md", "linux_server_operation/44_困难组生成与网页审核.md",

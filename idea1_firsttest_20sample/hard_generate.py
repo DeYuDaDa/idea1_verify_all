@@ -29,7 +29,7 @@ from runtime import ControllerSession
 HERE = Path(__file__).resolve().parent
 COMMIT = "f0825767cd50d69f666c7f282e54abfe58f1e917"
 BUILD = f"thor-CloudRendering-{COMMIT}"
-FROZEN_CASES = {"H04-2", "H04-3"}
+FROZEN_CASES = {"H01-1", "H04-2", "H04-3", "H05-3"}
 
 
 def controller_launch_options(platform, build_cache, executable=None):
@@ -339,6 +339,12 @@ def generate(selected, out, config, *, build_cache, executable=None, seed=17, sc
         except Exception as exc:
             row.update(status="execution_error", error=f"{type(exc).__name__}: {exc}", traceback=traceback.format_exc())
         finally:
+            book = getattr(ctx, "checkpoint_book", None) if ctx else None
+            if book is not None and row.get("error"):
+                try:
+                    book.fail(row["error"])
+                except Exception as checkpoint_exc:
+                    row["checkpoint_flush_error"] = str(checkpoint_exc)
             if not row["published_inputs"]:
                 _quarantine_partial_exports(out, case.case_id, directory)
             if trace:

@@ -1,7 +1,13 @@
 {
   "schema": "hard-human-accepted/v1",
   "accepted_on": "2026-10-28",
-  "case_ids": ["H04-2", "H04-3"],
+  "case_ids": ["H01-1", "H04-2", "H04-3", "H05-3"],
+  "accepted_sources": [
+    {"case_ids": ["H04-2", "H04-3"], "accepted_on": "2026-10-28", "source_archive": "20261027T113014Z_hard_groups_20261027T113014Z_lw8DkX_43_hard_groups.zip", "sha256": "223db7db6e8fe04f5db48a8faf6ec99b62395d5b846ae8fcdc7daa7112891510"},
+    {"case_ids": ["H01-1"], "accepted_on": "2026-10-29", "source_archive": "20261029T082509Z_hard_groups_20261029T082509Z_zFBt2I_43_hard_groups.zip", "sha256": "f3064fa4308896dabb036c60588868514a48ad8b36b55cd14c7587c20dd129d1"},
+    {"case_ids": ["H05-3"], "accepted_on": "2026-10-29", "source_archive": "20261029T054707Z_hard_groups_20261029T054707Z_My6wG0_43_hard_groups.zip", "sha256": "4442bd483ee61eef578c426460f4eed0c88aced93db4cf4584abd8071696758f"}
+  ],
+  "source_archive_scope": "Legacy top-level source_archive describes H04-2/3 only. Use accepted_sources for each case.",
   "source_archive": "20261027T113014Z_hard_groups_20261027T113014Z_lw8DkX_43_hard_groups.zip",
   "source_archive_sha256": "223db7db6e8fe04f5db48a8faf6ec99b62395d5b846ae8fcdc7daa7112891510",
   "status": "human_visual_review_accepted_model_not_evaluated",

@@ -208,7 +208,7 @@ def test_public_queries_do_not_embed_planned_gold_and_no_cooking_shortcut_is_use
     assert "_h05_cook_history_native" in source
     assert 'set_toggle(ctx.roles["Microwave"], True)' in source
     assert "native_move_" in source
-    uncooked = source[source.index('H05 uncooked history: place Potato inside'):source.index('final_inside = variant in (1, 2)')]
+    uncooked = source[source.index('H05 uncooked history: place Potato inside'):source.index('H05 place at final inside/outside position and close appliance')]
     assert 'set_open(ctx.roles["Microwave"], False)' in uncooked
     assert 'for _ in range(4):\n            ctx.step("Pass")' in uncooked
     assert 'set_open(ctx.roles["Microwave"], True)' in uncooked

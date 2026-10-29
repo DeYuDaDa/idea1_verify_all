@@ -149,11 +149,11 @@ def write_audit_timeline(ctx, trace, case):
         "boundaries": [{**r, "step_index": r["global_step"]} for r in boundaries],
         "steps": ([{"采集检查": ctx.capture_diagnostics}] if getattr(ctx, "capture_diagnostics", None) else []) + trace.events,
         "checks": ctx.checks,
-        "checkpoints": copy.deepcopy(getattr(ctx, "h01_checkpoints", [])),
+        "checkpoints": copy.deepcopy(getattr(ctx, "review_checkpoints", getattr(ctx, "h01_checkpoints", []))),
         "public_frame_map": [{"frame_index": i, "start_step": frame["start_step"],
                                "end_step": frame["end_step"], "step_numbers": frame.get("step_numbers", [])}
                               for i, frame in enumerate(trace.model_frames(), 1)]
-                             if getattr(ctx, "h01_natural", False) else [],
+                             if (getattr(ctx, "h01_natural", False) or getattr(ctx, "review_checkpoints", [])) else [],
         "note": "完整私有轨迹，含准备、失败与原生参数，不属于模型输入。",
     })
 

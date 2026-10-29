@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from hard_h01 import H01Natural, camera_delta, checkpoint_plan, liquid, parked, tilt
+from hard_h01 import H01Natural, camera_delta, checkpoint_plan, liquid, parked, tilt, variant_spec
 from hard_scenarios import HardConstructionError
 
 
@@ -113,6 +113,22 @@ class CupFixture:
 
 
 class H01NaturalTests(unittest.TestCase):
+    def test_four_variants_keep_identity_history_and_target_truth_distinct(self):
+        expected = {
+            1: ("A", "B", "A", {"A": "Empty", "B": "Water"}, {"A": "Coffee", "B": "Water"}),
+            2: ("B", "A", "A", {"A": "Water", "B": "Empty"}, {"A": "Water", "B": "Empty"}),
+            3: ("B", "A", "B", {"A": "Water", "B": "Empty"}, {"A": "Water", "B": "Coffee"}),
+            4: ("A", "B", "B", {"A": "Empty", "B": "Water"}, {"A": "Empty", "B": "Water"}),
+        }
+        for variant, values in expected.items():
+            with self.subTest(variant=variant):
+                spec = variant_spec(variant)
+                self.assertEqual(tuple(spec[k] for k in ("first", "second", "target", "before", "after")), values)
+                points = checkpoint_plan(variant)
+                self.assertEqual(len(points), 35)
+                self.assertIn(spec["first"], next(p for p in points if p["id"] == "T01-W01")["title"])
+                self.assertIn(spec["target"], next(p for p in points if p["id"] == "T07")["title"])
+
     def test_world_to_camera_translation_and_actual_spill_tilt(self):
         args = camera_delta({"x": 0, "y": 0, "z": 1}, {"rotation": {"y": 90}, "cameraHorizon": 0})
         self.assertAlmostEqual(args["right"], -1.)

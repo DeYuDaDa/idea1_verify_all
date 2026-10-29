@@ -135,6 +135,41 @@ class NativeNavigator:
         self._rotate(math.degrees(math.atan2(dx, dz)) % 360)
         self._look(math.degrees(math.atan2(camera["y"] - float(target["y"]), max(math.hypot(dx, dz), 1e-6))))
 
+    def _walk_carried_route(self, points, destination, blocked_edges, attempt):
+        """H02 opt-in: replan around failed carrying edges, with a hard budget."""
+        key = lambda p: (round(p["x"], 3), round(p["z"], 3))
+        replans = attempt.setdefault("carried_replans", [])
+        held_ids = [o.get("objectId") for o in self.session.inventory()]
+        for _ in range(5):
+            route = shortest_grid_route(points, xyz(self._agent()), destination, blocked=blocked_edges)
+            if not route:
+                raise NavigationUnavailable("No connected carrying route remains after blocked edges")
+            failed = False
+            for index, waypoint in enumerate(route):
+                if index == 0 and floor_distance(xyz(self._agent()), waypoint) <= .20:
+                    # After a partially completed failed edge, do not insist on
+                    # touching the nearest grid node before taking a detour.
+                    continue
+                previous = route[max(0, index - 1)]
+                try:
+                    self._walk(waypoint)
+                except (ActionFailure, NavigationUnavailable) as exc:
+                    if self.action_count > self.max_actions:
+                        raise
+                    edge = frozenset((key(previous), key(waypoint)))
+                    blocked_edges.add(edge)
+                    replans.append({"blocked_edge": sorted(edge), "error": str(exc),
+                                    "actual_position": xyz(self._agent()), "held_ids": held_ids})
+                    if [o.get("objectId") for o in self.session.inventory()] != held_ids:
+                        raise NavigationUnavailable("Held identity changed during carried route failure") from exc
+                    failed = True
+                    break
+                if [o.get("objectId") for o in self.session.inventory()] != held_ids:
+                    raise NavigationUnavailable("Held identity changed while carrying")
+            if not failed:
+                return
+        raise NavigationUnavailable("Bounded carrying-route replans exhausted")
+
     def _visible(self, object_id):
         event = self.session.controller.last_event
         obj = self.ctx.obj(object_id)
@@ -206,6 +241,7 @@ class NativeNavigator:
             current = xyz(self._agent())
             candidates.sort(key=lambda p: (floor_distance(p, current) + abs(distance_to_bounds(p, obj) - 0.8), p["x"], p["z"]))
             seen = set()
+            blocked_edges = set()
             for point in candidates:
                 signature = (round(point["x"], 3), round(point["z"], 3))
                 if signature in seen:
@@ -220,8 +256,11 @@ class NativeNavigator:
                     attempt["error"] = "No connected native route"
                     continue
                 try:
-                    for waypoint in route:
-                        self._walk(waypoint)
+                    if getattr(self.ctx, "carry_route_replanning", False) and self.session.inventory():
+                        self._walk_carried_route(positions, point, blocked_edges, attempt)
+                    else:
+                        for waypoint in route:
+                            self._walk(waypoint)
                     self._aim(self.ctx.obj(object_id))
                     attempt["approach"] = self._approach_evidence(object_id)
                     if attempt["approach"]["near"] and attempt["approach"]["rendered_visible"]:

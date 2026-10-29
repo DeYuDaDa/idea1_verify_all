@@ -430,17 +430,22 @@ def _sample_observation_window(ctx: Any, observation_passes: tuple[int, ...]) ->
     """Sample at true cumulative Pass offsets; Pass 0 is the immediate state."""
     started = time.monotonic()
     samples = []
+    def action_index():
+        records = getattr(ctx.session, "records", [])
+        return records[-1].get("index") if records else None
     if not observation_passes:
         total = 4
         ctx.phase("target observation settle window before Pass 1-4", public=True, kind="observation")
         _settle(ctx, steps=total)
         samples.append({"pass": total, "elapsed_wall_seconds": time.monotonic() - started,
+                        "action_index": action_index(),
                         "metadata": _snapshot(ctx, tuple(ctx.roles))})
         return samples, total
 
     offsets = sorted({0, *(int(n) for n in observation_passes if int(n) >= 0)})
     ctx.phase("target immediate observation at Pass 0", public=True, kind="observation")
     samples.append({"pass": 0, "elapsed_wall_seconds": time.monotonic() - started,
+                    "action_index": action_index(),
                     "metadata": _snapshot(ctx, tuple(ctx.roles))})
     last_pass = 0
     for target_pass in (offset for offset in offsets if offset > 0):
@@ -450,6 +455,7 @@ def _sample_observation_window(ctx: Any, observation_passes: tuple[int, ...]) ->
             ctx.step("Pass")
             last_pass += 1
         samples.append({"pass": target_pass, "elapsed_wall_seconds": time.monotonic() - started,
+                        "action_index": action_index(),
                         "metadata": _snapshot(ctx, tuple(ctx.roles))})
     return samples, last_pass
 
@@ -539,9 +545,14 @@ def _q(subject: str, predicate: str, answer_mode: str, question: str):
 
 def _h01(ctx: Any, variant: int):
     if variant == 1:
-        # Only this approved question uses the new natural-water history.
         from hard_h01 import run_h01_1
         return run_h01_1(ctx)
+    from hard_h01 import run_h01
+    return run_h01(ctx, variant)
+
+
+def _h01_legacy_direct_liquid_history(ctx: Any, variant: int):
+    """Historical implementation only; no catalog case calls this setter path."""
     _role(ctx, "A", "Mug", "canFillWithLiquid")
     _role(ctx, "B", "Mug", "canFillWithLiquid", exclude=("A",))
     _role(ctx, "M", "CoffeeMachine")
@@ -601,6 +612,8 @@ def _h01(ctx: Any, variant: int):
 
 
 def _h02(ctx: Any, variant: int):
+    # Bare-agent reachability alone does not certify a route for a wide plate.
+    ctx.carry_route_replanning = True
     _role(ctx, "P", "Plate", ("pickupable", "receptacle"))
     _role(ctx, "Q", "Plate", ("pickupable", "receptacle"), exclude=("P",))
     _role(ctx, "X", "Apple", "pickupable")
@@ -865,37 +878,158 @@ def _prepare_h05_native(ctx: Any, variant: int):
     ctx.ops.settle(steps=4)
 
 
-def _h05_cook_history_native(ctx: Any):
-    _native_transfer(ctx, "Z", "Microwave")
-    ctx.ops.set_open(ctx.roles["Microwave"], False)
-    ctx.ops.set_toggle(ctx.roles["Microwave"], True)
-    _poll_temperature_cook(ctx, cooked_required=True, timeout=20.0, max_passes=400)
-    ctx.ops.set_toggle(ctx.roles["Microwave"], False)
-    ctx.ops.set_open(ctx.roles["Microwave"], True)
-    _native_transfer(ctx, "Z", "cooling_C")
-    _natural_cool_h05(ctx)
+def _h05_checkpoint_state(ctx: Any) -> dict[str, Any]:
+    potato, microwave = ctx.obj("Z"), ctx.obj("Microwave")
+    if _relation(ctx, "Z", "Microwave"):
+        location = "Microwave"
+    elif _relation(ctx, "Z", "final_E"):
+        location = "final_E"
+    elif _relation(ctx, "Z", "cooling_C"):
+        location = "cooling_C"
+    else:
+        location = "other_or_unknown"
+    return {"temperature": _temperature(potato), "isCooked": potato.get("isCooked"),
+            "location": location, "microwave.isToggled": microwave.get("isToggled"),
+            "microwave.isOpen": microwave.get("isOpen"),
+            "held_empty": not bool(ctx.session.inventory())}
+
+
+def _h05_fact_rows(expected: dict[str, Any], actual: dict[str, Any]) -> list[dict[str, Any]]:
+    return [{"name": name, "expected": value, "actual": actual.get(name)}
+            for name, value in expected.items()]
+
+
+def _h05_checkpoint(ctx: Any, book: Any, checkpoint_id: str, action: Callable[[], Any],
+                    expected: dict[str, Any]) -> dict[str, Any]:
+    book.begin(checkpoint_id)
+    action()
+    actual = _h05_checkpoint_state(ctx)
+    row = book.finish(_h05_fact_rows(expected, actual))
+    ctx.require(row.get("status") == "passed",
+                f"H05 checkpoint {checkpoint_id} failed: {row.get('facts')}")
+    return row
+
+
+def _h05_cook_history_native(ctx: Any, book: Any = None):
+    if book is None:
+        _native_transfer(ctx, "Z", "Microwave")
+        ctx.ops.set_open(ctx.roles["Microwave"], False)
+        ctx.ops.set_toggle(ctx.roles["Microwave"], True)
+        _poll_temperature_cook(ctx, cooked_required=True, timeout=20.0, max_passes=400)
+        ctx.ops.set_toggle(ctx.roles["Microwave"], False)
+        ctx.ops.set_open(ctx.roles["Microwave"], True)
+        _native_transfer(ctx, "Z", "cooling_C")
+        _natural_cool_h05(ctx)
+        return
+
+    _h05_checkpoint(ctx, book, "cook_history_place_inside",
+                    lambda: _native_transfer(ctx, "Z", "Microwave"),
+                    {"location": "Microwave", "isCooked": False, "temperature": "RoomTemp",
+                     "held_empty": True})
+    _h05_checkpoint(ctx, book, "cook_history_close_off",
+                    lambda: ctx.ops.set_open(ctx.roles["Microwave"], False),
+                    {"location": "Microwave", "isCooked": False, "temperature": "RoomTemp",
+                     "microwave.isToggled": False, "microwave.isOpen": False, "held_empty": True})
+
+    def heat_until_cooked():
+        ctx.ops.set_toggle(ctx.roles["Microwave"], True)
+        _poll_temperature_cook(ctx, cooked_required=True, timeout=20.0, max_passes=400)
+
+    _h05_checkpoint(ctx, book, "cook_history_turn_on_and_cook", heat_until_cooked,
+                    {"location": "Microwave", "isCooked": True, "temperature": "Hot",
+                     "microwave.isToggled": True, "microwave.isOpen": False, "held_empty": True})
+    _h05_checkpoint(ctx, book, "cook_history_turn_off",
+                    lambda: ctx.ops.set_toggle(ctx.roles["Microwave"], False),
+                    {"location": "Microwave", "isCooked": True, "microwave.isToggled": False,
+                     "microwave.isOpen": False, "held_empty": True})
+    _h05_checkpoint(ctx, book, "cook_history_open",
+                    lambda: ctx.ops.set_open(ctx.roles["Microwave"], True),
+                    {"location": "Microwave", "isCooked": True, "microwave.isToggled": False,
+                     "microwave.isOpen": True, "held_empty": True})
+    _h05_checkpoint(ctx, book, "cook_history_remove_to_cooling",
+                    lambda: _native_transfer(ctx, "Z", "cooling_C"),
+                    {"location": "cooling_C", "isCooked": True, "microwave.isToggled": False,
+                     "microwave.isOpen": True, "held_empty": True})
+    _h05_checkpoint(ctx, book, "cook_history_natural_cooling",
+                    lambda: _natural_cool_h05(ctx),
+                    {"location": "cooling_C", "isCooked": True, "temperature": "RoomTemp",
+                     "microwave.isToggled": False, "microwave.isOpen": True, "held_empty": True})
 
 
 def _h05(ctx: Any, variant: int):
-    _prepare_h05_native(ctx, variant)
-    _calibrate_forward(ctx, "Z", "cooling_C", "Microwave")
-    # Inside-ending variants never use final_E. Requiring that unrelated route
-    # caused the old H05-1/2 batch to fail before its actual story even started.
-    if variant in (3, 4):
-        _calibrate_forward(ctx, "Z", "cooling_C", "final_E")
-    ctx.require(ctx.obj("Z").get("isCooked") is False
-                and _temperature(ctx.obj("Z")) == "RoomTemp"
-                and _relation(ctx, "Z", "cooling_C"),
-                "H05 endpoint calibration did not restore the uncooked RoomTemp baseline")
+    from hard_checkpoint import ScenarioCheckpointBook
+
+    final_inside = variant in (1, 2)
+    cooked_history = variant in (2, 4)
+    final_location = "Microwave" if final_inside else "final_E"
+    pre_event_cooked = cooked_history
+    expected_final_cooked = final_inside or cooked_history
+    expected_final_temperature = "Hot" if final_inside else "RoomTemp"
+    plan = [
+        {"checkpoint_id": "private_calibration", "label": "起点与私有校准恢复",
+         "expected": {"isCooked": False, "temperature": "RoomTemp", "location": "cooling_C",
+                      "microwave.isToggled": False, "held_empty": True}},
+        {"checkpoint_id": "history_baseline", "label": "公开历史起点",
+         "expected": {"isCooked": False, "temperature": "RoomTemp", "microwave.isToggled": False,
+                      "held_empty": True}},
+    ]
+    if cooked_history:
+        plan.extend([
+            {"checkpoint_id": "cook_history_place_inside", "label": "煮熟历史：放入微波炉"},
+            {"checkpoint_id": "cook_history_close_off", "label": "煮熟历史：关门且保持关机"},
+            {"checkpoint_id": "cook_history_turn_on_and_cook", "label": "煮熟历史：真实开机并达到熟化"},
+            {"checkpoint_id": "cook_history_turn_off", "label": "煮熟历史：关机"},
+            {"checkpoint_id": "cook_history_open", "label": "煮熟历史：开门"},
+            {"checkpoint_id": "cook_history_remove_to_cooling", "label": "煮熟历史：取出到冷却位"},
+            {"checkpoint_id": "cook_history_natural_cooling", "label": "煮熟历史：自然冷却并保留熟度"},
+        ])
+    else:
+        plan.extend([
+            {"checkpoint_id": "uncooked_place_inside", "label": "未熟历史：放入微波炉"},
+            {"checkpoint_id": "uncooked_close_off", "label": "未熟历史：关门并保持关机"},
+            {"checkpoint_id": "uncooked_fixed_wait", "label": "未熟历史：固定四步等待"},
+            {"checkpoint_id": "uncooked_open_remove", "label": "未熟历史：开门并取出"},
+        ])
+    plan.extend([
+        {"checkpoint_id": "final_position", "label": "最终位置及关门关机状态"},
+        {"checkpoint_id": "target_toggle_immediate", "label": "目标开机事件即时检查"},
+        {"checkpoint_id": "target_fixed_window", "label": "目标事件固定观察窗口真值检查",
+         "expected": {"temperature": expected_final_temperature, "isCooked": expected_final_cooked,
+                      "location": final_location, "microwave.isToggled": True,
+                      "microwave.isOpen": False, "held_empty": True}},
+    ])
+    book = ScenarioCheckpointBook(ctx, scenario="H05", variant=variant, plan=plan)
+    ctx.checkpoint_book = book
+
+    def calibrate_and_restore():
+        _prepare_h05_native(ctx, variant)
+        _calibrate_forward(ctx, "Z", "cooling_C", "Microwave")
+        # Inside-ending variants never use final_E. Requiring that unrelated route
+        # caused the old H05-1/2 batch to fail before its actual story even started.
+        if variant in (3, 4):
+            _calibrate_forward(ctx, "Z", "cooling_C", "final_E")
+        ctx.require(ctx.obj("Z").get("isCooked") is False
+                    and _temperature(ctx.obj("Z")) == "RoomTemp"
+                    and _relation(ctx, "Z", "cooling_C"),
+                    "H05 endpoint calibration did not restore the uncooked RoomTemp baseline")
+
+    _h05_checkpoint(ctx, book, "private_calibration", calibrate_and_restore,
+                    {"isCooked": False, "temperature": "RoomTemp", "location": "cooling_C",
+                     "microwave.isToggled": False, "held_empty": True})
     _start(ctx, "公开温度前提：最终测试阶段的室温基线已通过本次原生 metadata 确认；不预告土豆熟度或最终内外位置。")
     _phase(ctx, "H05 baseline uncooked and RoomTemp")
     state = ctx.obj("Z")
     ctx.require(state.get("isCooked") is False and _temperature(state) == "RoomTemp",
                 "H05 requires native reset potato uncooked and at RoomTemp")
     ctx.initial_metadata = ctx.session.snapshot()
+    book.begin("history_baseline")
+    row = book.finish(_h05_fact_rows(
+        {"isCooked": False, "temperature": "RoomTemp", "microwave.isToggled": False,
+         "held_empty": True}, _h05_checkpoint_state(ctx)))
+    ctx.require(row.get("status") == "passed", f"H05 checkpoint history_baseline failed: {row.get('facts')}")
     if variant in (2, 4):
         _phase(ctx, "H05 real microwave cook history: put in, close, turn on")
-        _h05_cook_history_native(ctx)
+        _h05_cook_history_native(ctx, book)
         ctx.require(ctx.obj("Z").get("isCooked") is True,
                     "Natural microwave history did not verify isCooked=True")
         _phase(ctx, "H05 natural cook history completed; temperature and cooked state rechecked")
@@ -903,27 +1037,46 @@ def _h05(ctx: Any, variant: int):
                     "Potato did not naturally cool to RoomTemp while retaining cooked state")
     else:
         _phase(ctx, "H05 uncooked history: place Potato inside while microwave stays off")
-        ctx.ops.set_open(ctx.roles["Microwave"], True)
-        _native_transfer(ctx, "Z", "Microwave")
+        _h05_checkpoint(ctx, book, "uncooked_place_inside",
+                        lambda: (ctx.ops.set_open(ctx.roles["Microwave"], True),
+                                 _native_transfer(ctx, "Z", "Microwave")),
+                        {"location": "Microwave", "isCooked": False, "temperature": "RoomTemp",
+                         "microwave.isToggled": False, "microwave.isOpen": True, "held_empty": True})
         _phase(ctx, "H05 uncooked history: close microwave; do not turn it on")
-        ctx.ops.set_open(ctx.roles["Microwave"], False)
+        _h05_checkpoint(ctx, book, "uncooked_close_off",
+                        lambda: ctx.ops.set_open(ctx.roles["Microwave"], False),
+                        {"location": "Microwave", "isCooked": False, "temperature": "RoomTemp",
+                         "microwave.isToggled": False, "microwave.isOpen": False, "held_empty": True})
         ctx.require(ctx.obj("Microwave").get("isToggled") is False,
                     "H05 uncooked history must keep the microwave off")
         _phase(ctx, "H05 uncooked history: fixed four native Pass while closed")
+        book.begin("uncooked_fixed_wait")
         for _ in range(4):
             ctx.step("Pass")
+        row = book.finish(_h05_fact_rows(
+            {"location": "Microwave", "isCooked": False, "temperature": "RoomTemp",
+             "microwave.isToggled": False, "microwave.isOpen": False, "held_empty": True},
+            _h05_checkpoint_state(ctx)))
+        ctx.require(row.get("status") == "passed", f"H05 checkpoint uncooked_fixed_wait failed: {row.get('facts')}")
         ctx.require(ctx.obj("Microwave").get("isToggled") is False
                     and ctx.obj("Z").get("isCooked") is False
                     and _temperature(ctx.obj("Z")) == "RoomTemp"
                     and _relation(ctx, "Z", "Microwave"),
                     "H05 uncooked closed wait changed appliance power, Potato cooked state, temperature, or location")
         _phase(ctx, "H05 uncooked history: reopen microwave and remove Potato")
-        ctx.ops.set_open(ctx.roles["Microwave"], True)
-        _native_transfer(ctx, "Z", "cooling_C")
-    final_inside = variant in (1, 2)
+        _h05_checkpoint(ctx, book, "uncooked_open_remove", lambda: (
+            ctx.ops.set_open(ctx.roles["Microwave"], True), _native_transfer(ctx, "Z", "cooling_C")),
+            {"location": "cooling_C", "isCooked": False, "temperature": "RoomTemp",
+             "microwave.isToggled": False, "microwave.isOpen": True, "held_empty": True})
     _phase(ctx, "H05 place at final inside/outside position and close appliance")
-    _native_transfer(ctx, "Z", "Microwave" if final_inside else "final_E")
-    ctx.ops.set_open(ctx.roles["Microwave"], False)
+    def place_final():
+        _native_transfer(ctx, "Z", final_location)
+        ctx.ops.set_open(ctx.roles["Microwave"], False)
+
+    _h05_checkpoint(ctx, book, "final_position", place_final,
+                    {"location": final_location, "isCooked": pre_event_cooked,
+                     "temperature": "RoomTemp", "microwave.isToggled": False,
+                     "microwave.isOpen": False, "held_empty": True})
     final = ctx.obj("Z")
     ctx.require(final.get("isCooked") is (variant in (2, 4)) and _temperature(final) == "RoomTemp",
                 "H05 final pre-event temperature/cooked metadata failed validation")
@@ -937,7 +1090,43 @@ def _h05(ctx: Any, variant: int):
     ctx.require(not ctx.session.inventory(), "H05 final positioning left an object held")
     ctx.public_declarations.append("已逐题公开最终阶段土豆室温基线确认；熟度仍依据历史与真实 metadata。")
     _phase(ctx, "H05 target ToggleObjectOn Microwave", kind="target")
-    _target_event(ctx, "ToggleObjectOn", "Microwave", observation_passes=(0, 1, 4, 12, 36, 72, 120))
+    book.begin("target_toggle_immediate")
+    event = _target_event(ctx, "ToggleObjectOn", "Microwave", observation_passes=(0, 1, 4, 12, 36, 72, 120))
+    immediate = event.get("observation_samples", [{}])[0].get("metadata", {})
+    immediate_actual = {"microwave.isToggled": (immediate.get("Microwave") or {}).get("isToggled"),
+                        "microwave.isOpen": (immediate.get("Microwave") or {}).get("isOpen"),
+                        "location": ("Microwave" if _relation(ctx, "Z", "Microwave") else
+                                     "final_E" if _relation(ctx, "Z", "final_E") else "other_or_unknown"),
+                        "isCooked": (immediate.get("Z") or {}).get("isCooked"),
+                        "held_empty": not bool(ctx.session.inventory())}
+    event_index = event.get("event_index")
+    immediate_expected = {"microwave.isToggled": True, "microwave.isOpen": False,
+                          "location": final_location, "held_empty": True}
+    # Heating may already change an inside uncooked potato in the native
+    # ToggleObjectOn return. Do not require the old cooked value after the event.
+    if cooked_history or not final_inside:
+        immediate_expected["isCooked"] = pre_event_cooked
+    immediate_facts = _h05_fact_rows(immediate_expected, immediate_actual)
+    immediate_facts.append({"name": "原生熟度字段存在", "expected": True,
+                            "actual": isinstance(immediate_actual.get("isCooked"), bool)})
+    immediate_row = book.finish(immediate_facts,
+        snapshot=immediate, frame_action_index=event_index,
+        observation_refs=[{"pass": 0, "action_index": event_index, "snapshot": immediate}], capture=False)
+    ctx.require(immediate_row.get("status") == "passed",
+                f"H05 checkpoint target_toggle_immediate failed: {immediate_row.get('facts')}")
+
+    book.begin("target_fixed_window")
+    final_actual = _h05_checkpoint_state(ctx)
+    final_row = book.finish(_h05_fact_rows(
+        {"temperature": expected_final_temperature, "isCooked": expected_final_cooked,
+         "location": final_location, "microwave.isToggled": True,
+         "microwave.isOpen": False, "held_empty": True}, final_actual),
+        observation_refs=[{"pass": int(sample["pass"]), "action_index": sample.get("action_index"),
+                           "snapshot": sample.get("metadata")}
+                          for sample in event.get("observation_samples", [])],
+        frame_action_index=(event.get("observation_samples") or [{}])[-1].get("action_index"))
+    ctx.require(final_row.get("status") == "passed",
+                f"H05 checkpoint target_fixed_window failed: {final_row.get('facts')}")
     _questions(ctx, [
         _q("Microwave", "isToggled", "boolean", "微波炉现在开启了吗？"),
         _q("Z", "temperature", "enum:Hot|Cold|RoomTemp", "土豆现在是什么温度？"),

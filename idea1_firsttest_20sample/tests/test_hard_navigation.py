@@ -3,7 +3,7 @@ import math
 import unittest
 from types import SimpleNamespace
 
-from hard_navigation import NativeNavigator, shortest_grid_route
+from hard_navigation import NativeNavigator, shortest_grid_route, NavigationUnavailable
 from runtime import StepResult
 
 
@@ -39,6 +39,28 @@ class NavigationSession:
 
 
 class HardNavigationTests(unittest.TestCase):
+    def test_carried_route_blocks_failed_edge_and_takes_a_native_detour(self):
+        session = NavigationSession()
+        navigator = NativeNavigator(SimpleNamespace(session=session, navigation_attempts=[]))
+        points = [{"x": x, "y": 0., "z": z} for x in (0., .25, .5) for z in (0., .25)]
+        original_walk = navigator._walk
+        collisions = []
+
+        def walk(point):
+            p = session.snapshot()["agent"]["position"]
+            if abs(p["x"]) < .01 and abs(p["z"]) < .01 and point["x"] == .25 and point["z"] == 0.:
+                collisions.append(point)
+                raise NavigationUnavailable("Wide held plate touches wall on this edge")
+            return original_walk(point)
+
+        navigator._walk = walk
+        evidence = {}
+        navigator._walk_carried_route(points, {"x": .5, "y": 0., "z": 0.}, set(), evidence)
+        self.assertEqual(len(collisions), 1)
+        self.assertEqual(len(evidence["carried_replans"]), 1)
+        self.assertAlmostEqual(session.metadata["agent"]["position"]["x"], .5, places=2)
+        self.assertFalse(any(r["action"].startswith("Teleport") for r in session.records))
+
     def test_long_surface_uses_reachable_edge_not_distant_pivot(self):
         session = NavigationSession()
         session.metadata["agent"]["position"] = {"x": .25, "y": .901, "z": -1.75}
