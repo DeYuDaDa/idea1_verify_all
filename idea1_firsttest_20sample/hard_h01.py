@@ -110,12 +110,14 @@ class H01Natural:
         self.expected_machine = False
         self.expected_liquids = {"A": "Empty", "B": "Empty"}
         self.calibrations = {}
+        self.pending_spill_rolls = {}
         self.persist()
 
     def persist(self):
         write_json(self.ctx.out / "h01_checkpoints.json", {
             "schema": "h01-checkpoints/v1", "case_id": "H01-1",
             "checkpoints": self.ctx.h01_checkpoints, "calibrations": self.calibrations,
+            "pending_spill_relative_rolls": self.pending_spill_rolls,
             "contact_passes": CONTACT_PASSES, "hand_step_m": MAX_HAND_STEP,
             "note": "私有检查与图片定位；不属于模型输入，程序通过不等于人眼可答。"})
 
@@ -339,15 +341,23 @@ class H01Natural:
     def spill_held(self, role):
         self.ctx.require(self.holding(role) and self.ctx.obj("Faucet").get("isToggled") is False,
                          "Spill requires correct held cup and faucet off")
+        self.ctx.require(tilt(self.ctx.obj(role)) < 15 and liquid(self.ctx.obj(role)) == "Water",
+                         "Spill must begin with an upright cup of water")
+        self.ctx.require(not self.pending_spill_rolls.get(role), "Previous spill rotation was not reversed")
+        applied = self.pending_spill_rolls.setdefault(role, [])
         self.capture((self.active or {})["id"] + " / 倾倒前仍有水")
         emptied = False
-        for roll in (0, 20, 40, 60, 80, 100, 120):
-            self.step("RotateHeldObject", pitch=0, yaw=0, roll=roll)
+        # The pitch/yaw/roll overload is RELATIVE, not an absolute pose setter.
+        # Record only successful deltas so upright can invert exactly these calls.
+        for _ in range(6):
+            self.step("RotateHeldObject", pitch=0, yaw=0, roll=20)
+            applied.append(20)
+            self.persist()
             if liquid(self.ctx.obj(role)) == "Empty":
                 self.ctx.require(tilt(self.ctx.obj(role)) > 90, "Cup emptied before measured spill tilt")
                 emptied = True
                 break
-            if roll >= 100:
+            if tilt(self.ctx.obj(role)) > 90:
                 for _ in range(CONTACT_PASSES):
                     self.step("Pass")
                     if liquid(self.ctx.obj(role)) == "Empty":
@@ -359,7 +369,13 @@ class H01Natural:
         self.ctx.require(emptied, "Native tilting did not empty cup; no direct empty fallback")
 
     def upright(self, role):
-        self.step("RotateHeldObject", pitch=0, yaw=0, roll=0)
+        applied = self.pending_spill_rolls.get(role, [])
+        while applied:
+            self.step("RotateHeldObject", pitch=0, yaw=0, roll=-applied[-1])
+            applied.pop()
+            self.ctx.require(self.holding(role) and liquid(self.ctx.obj(role)) == "Empty",
+                             "Spill restoration lost original empty held cup")
+            self.persist()
         self.ctx.require(tilt(self.ctx.obj(role)) < 15 and self.holding(role), "Cup not restored upright")
 
     def facts(self, role=None, value=None, *, held=None):
@@ -390,9 +406,14 @@ class H01Natural:
         height = max(float(basin["y"]), height)
         candidates = [{"x": float(faucet["x"]) * (1-t) + float(basin["x"]) * t,
                        "y": height, "z": float(faucet["z"]) * (1-t) + float(basin["z"]) * t}
-                      for t in (0.5, 1., 0., .25, .75)]
+                      # Basin-centred candidate succeeded in GJGb0m; the older
+                      # halfway candidate collided with the faucet. Keep bounded
+                      # native alternatives, but do not repeat that known bad path first.
+                      for t in (1., 0.5, 0., .25, .75)]
         trials = []
-        self.calibrations[role] = {"status": "searching", "trials": trials}
+        self.calibrations[role] = {"status": "searching", "trials": trials,
+                                   "protocol": "native_wet_contact_only",
+                                   "dry_control_repeated": False}
         stance = self.approach_water(role, candidates)
         self.calibrations[role]["approach_agent_position"] = stance
         start = center(self.ctx.obj(role))
@@ -402,14 +423,9 @@ class H01Natural:
             trials.append(trial)
             self.persist()
             try:
-                # Same approach with source off must not fill, then repeat with source on.
-                self.source(False)
-                self.hand_path(role, goal, expect_empty=True)
-                for _ in range(CONTACT_PASSES):
-                    self.step("Pass")
-                self.ctx.require(liquid(self.ctx.obj(role)) == "Empty", "Dry-control water effect")
-                self.hand_path(role, start, expect_empty=True)
-                trial["dry_control_passed"] = True
+                trial["stage"] = "water_contact_geometry"
+                self.ctx.phase("C03-" + role + f" / 候选{index + 1} / 开水自然接水校准",
+                               public=False, kind="calibration")
                 self.source(True)
                 self.ctx.require(liquid(self.ctx.obj(role)) == "Empty", "Water source reaches approach start")
                 self.hand_path(role, goal)
@@ -423,20 +439,27 @@ class H01Natural:
                 trial["became_water"] = filled
                 if filled:
                     self.ctx.require(liquid(self.ctx.obj(role)) == "Water", "Water lost on retreat")
-                    self.calibrations[role].update(status="verified", goal_center=goal,
+                    trial["water_retained_after_retreat"] = True
+                    trial["stage"] = "spill_and_restore"
+                    self.calibrations[role].update(status="contact_verified_pending_spill_restore", goal_center=goal,
                         approach_start=start, contact_passes=CONTACT_PASSES)
                     self.spill_held(role)
                     self.upright(role)
                     self.put_back(role)
                     self.finish(self.facts(role, "Empty", held=False) + [("水龙头关闭", False,
-                        self.ctx.obj("Faucet").get("isToggled")), ("同路径关水对照与开水接水", True, True)])
+                        self.ctx.obj("Faucet").get("isToggled")),
+                        ("流水接触后实际装水", True, trial.get("became_water")),
+                        ("离水关水后保留水", True, trial.get("water_retained_after_retreat"))])
+                    self.calibrations[role]["status"] = "verified"
+                    self.persist()
                     return
             except Exception as exc:
                 trial["error"] = f"{type(exc).__name__}: {exc}"
                 self.persist()
                 # No reset, scene teleport, fill setter, or swallowed spill/state error.
                 # Recover only a still-empty cup from a failed geometry trial.
-                if not self.holding(role) or liquid(self.ctx.obj(role)) != "Empty":
+                if (trial.get("stage") != "water_contact_geometry"
+                        or not self.holding(role) or liquid(self.ctx.obj(role)) != "Empty"):
                     raise
                 self.source(False)
                 self.hand_path(role, start, expect_empty=True)

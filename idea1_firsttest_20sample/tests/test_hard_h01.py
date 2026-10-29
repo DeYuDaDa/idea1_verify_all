@@ -98,7 +98,10 @@ class CupFixture:
                 for axis, key in (("x", "right"), ("y", "up"), ("z", "ahead")):
                     obj["position"][axis] += kwargs[key]
             if action == "RotateHeldObject":
-                obj["rotation"] = {"x": kwargs["pitch"], "y": kwargs["yaw"], "z": -kwargs["roll"]}
+                # Match the pinned float-overload semantics: native deltas.
+                obj["rotation"]["x"] += kwargs["pitch"]
+                obj["rotation"]["y"] += kwargs["yaw"]
+                obj["rotation"]["z"] = (obj["rotation"]["z"] - kwargs["roll"]) % 360
                 if self.spill and tilt(obj) > 90:
                     obj.update(isFilledWithLiquid=False, fillLiquid=None)
             if self.contact and self.objects["f"]["isToggled"] and obj["position"]["z"] >= .18:
@@ -177,6 +180,9 @@ class H01NaturalTests(unittest.TestCase):
             self.assertEqual(liquid(ctx.obj("A")), "Empty")
             self.assertLess(tilt(ctx.obj("A")), 15)
             self.assertNotIn("EmptyLiquidFromObject", [r["action"] for r in ctx.records])
+            rolls = [r["kwargs"]["roll"] for r in ctx.records if r["action"] == "RotateHeldObject"]
+            self.assertEqual(rolls, [20] * 5 + [-20] * 5)
+            self.assertEqual(story.pending_spill_rolls["A"], [])
             self.assertTrue(all(r["status"] == "passed" for r in ctx.h01_checkpoints if r["id"].startswith("T03")))
 
     def test_tilt_without_native_liquid_effect_is_rejected(self):
@@ -187,6 +193,29 @@ class H01NaturalTests(unittest.TestCase):
             story.expected_liquids["A"] = "Water"
             with self.assertRaisesRegex(HardConstructionError, "no direct empty fallback"):
                 story.spill("A", "T03")
+
+    def test_calibration_does_not_repeat_dry_contact_control(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ctx = CupFixture(temp)
+            story = H01Natural(ctx)
+            story.calibrate_water("A")
+            actions = [r["action"] for r in ctx.records]
+            self.assertLess(actions.index("ToggleObjectOn"), actions.index("MoveHeldObject"))
+            self.assertEqual(actions.count("ToggleObjectOn"), 1)
+            self.assertEqual(story.calibrations["A"]["status"], "verified")
+            self.assertFalse(story.calibrations["A"]["dry_control_repeated"])
+            self.assertNotIn("dry_control_passed", story.calibrations["A"]["trials"][0])
+
+    def test_primary_spill_restore_failure_is_not_masked_by_water_path_retry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ctx = CupFixture(temp)
+            story = H01Natural(ctx)
+            with patch.object(story, "upright", side_effect=HardConstructionError("primary restoration failed")):
+                with self.assertRaisesRegex(HardConstructionError, "primary restoration failed"):
+                    story.calibrate_water("A")
+            self.assertEqual(story.calibrations["A"]["trials"][0]["stage"], "spill_and_restore")
+            self.assertEqual(ctx.records[-1]["action"], "RotateHeldObject")
+            self.assertIn("primary restoration failed", story.calibrations["A"]["trials"][0]["error"])
 
     def test_unrelated_cup_corruption_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
