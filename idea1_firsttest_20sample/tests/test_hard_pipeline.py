@@ -80,7 +80,15 @@ class HardPipelineTests(unittest.TestCase):
         self.assertEqual(len(result["cases"]), 20)
         self.assertFalse(result["simulator_started"])
         self.assertFalse(result["model_called"])
-        self.assertTrue(all(c["scene"] == "FloorPlan2" for c in result["cases"] if c["group_id"] in {"H02", "H03"}))
+        # H02 needs four independent support surfaces; its preferred scene
+        # changed to FloorPlan6. H03 retains its own FloorPlan2 preference.
+        expected_scenes = {"H01": "FloorPlan1", "H02": "FloorPlan6", "H03": "FloorPlan2",
+                           "H04": "FloorPlan1", "H05": "FloorPlan1"}
+        for group_id, scene in expected_scenes.items():
+            with self.subTest(group_id=group_id):
+                group_cases = [c for c in result["cases"] if c["group_id"] == group_id]
+                self.assertEqual(len(group_cases), 4)
+                self.assertEqual({c["scene"] for c in group_cases}, {scene})
         self.assertTrue(next(c for c in result["cases"] if c["case_id"] == "H04-4")["conditional_reparenting_unverified"])
 
     def test_export_freezes_all_fields_and_keeps_actual_gold_private(self):
